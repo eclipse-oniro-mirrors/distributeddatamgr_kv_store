@@ -16,9 +16,11 @@
 #ifndef GENRIC_SYNCER_H
 #define GENRIC_SYNCER_H
 
+#include <condition_variable>
 #include <functional>
-#include <mutex>
 #include <map>
+#include <memory>
+#include <mutex>
 
 #include "isyncer.h"
 #include "isync_engine.h"
@@ -27,6 +29,12 @@
 #include "time_helper.h"
 
 namespace DistributedDB {
+struct EngineFinalizeState {
+    std::mutex mtx;
+    std::condition_variable cv;
+    bool finalized = false;
+};
+
 class GenericSyncer : public virtual ISyncer {
 using DataChangedFunc = std::function<void(const std::string &device)>;
 
@@ -239,9 +247,7 @@ protected:
     mutable std::mutex queuedManualSyncLock_;
     mutable std::mutex syncerLock_;
     std::string label_;
-    std::mutex engineMutex_;
-    bool engineFinalize_;
-    std::condition_variable engineFinalizeCv_;
+    std::shared_ptr<EngineFinalizeState> engineFinalizeState_ = std::make_shared<EngineFinalizeState>();
 
     std::mutex timeChangeListenerMutex_;
     bool timeChangeListenerFinalize_;

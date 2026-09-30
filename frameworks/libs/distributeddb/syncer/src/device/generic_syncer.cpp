@@ -51,7 +51,6 @@ GenericSyncer::GenericSyncer()
       queuedManualSyncLimit_(DBConstant::QUEUED_SYNC_LIMIT_DEFAULT),
       manualSyncEnable_(true),
       closing_(false),
-      engineFinalize_(false),
       timeChangeListenerFinalize_(true),
       timeChangedListener_(nullptr)
 {
@@ -64,9 +63,10 @@ GenericSyncer::~GenericSyncer()
         syncEngine_->OnKill([this]() { this->syncEngine_->Close(); });
         RefObject::KillAndDecObjRef(syncEngine_);
         // waiting all thread exist
-        std::unique_lock<std::mutex> cvLock(engineMutex_);
-        bool engineFinalize = engineFinalizeCv_.wait_for(cvLock, std::chrono::milliseconds(DBConstant::MIN_TIMEOUT),
-            [this]() { return engineFinalize_; });
+        auto &state = engineFinalizeState_;
+        std::unique_lock<std::mutex> cvLock(state->mtx);
+        bool engineFinalize = state->cv.wait_for(cvLock, std::chrono::milliseconds(DBConstant::MIN_TIMEOUT),
+            [&state]() { return state->finalized; });
         if (!engineFinalize) {
             LOGW("syncer finalize before engine finalize!");
         }
@@ -939,13 +939,14 @@ int GenericSyncer::BuildSyncEngine()
     if (syncEngine_ == nullptr) {
         return -E_OUT_OF_MEMORY;
     }
-    syncEngine_->OnLastRef([this]() {
+    auto state = engineFinalizeState_; // keep state alive after syncer destructed
+    syncEngine_->OnLastRef([state]() {
         LOGD("[Syncer] SyncEngine finalized");
         {
-            std::lock_guard<std::mutex> cvLock(engineMutex_);
-            engineFinalize_ = true;
+            std::lock_guard<std::mutex> cvLock(state->mtx);
+            state->finalized = true;
         }
-        engineFinalizeCv_.notify_all();
+        state->cv.notify_all();
     });
     return E_OK;
 }

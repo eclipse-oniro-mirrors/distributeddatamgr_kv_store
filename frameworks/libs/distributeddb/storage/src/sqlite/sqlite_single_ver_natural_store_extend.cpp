@@ -81,6 +81,7 @@ int SQLiteSingleVerNaturalStore::StartLifeCycleTimer(const DatabaseLifeCycleNoti
             });
             if (ret != E_OK) {
                 LOGE("SQLiteSingleVerNaturalStore timer finalizer ScheduleTask, errCode %d", ret);
+                RefObject::DecObjRef(this);
             }
         },
         timerId);

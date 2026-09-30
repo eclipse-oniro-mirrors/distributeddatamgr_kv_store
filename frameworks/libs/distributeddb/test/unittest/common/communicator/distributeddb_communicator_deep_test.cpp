@@ -1613,4 +1613,67 @@ HWTEST_F(DistributedDBCommunicatorDeepTest, SendFailed002, TestSize.Level0)
     EXPECT_EQ(aggregator->GetRetryCount(DEVICE_NAME_B, true), 0);
     EXPECT_EQ(aggregator->GetRetryCount(DEVICE_NAME_B, false), 0);
 }
+
+/**
+ * @tc.name: SendFailed003
+ * @tc.desc: Test retry send task when SetTimer fails.
+ * @tc.type: FUNC
+ * @tc.author: zqq
+ */
+HWTEST_F(DistributedDBCommunicatorDeepTest, SendFailed003, TestSize.Level3)
+{
+    std::condition_variable cv;
+    std::mutex endMutex;
+    bool sendEnd = false;
+    OnSendEnd onEnd = [&cv, &endMutex, &sendEnd](int, bool) {
+        std::lock_guard<std::mutex> autoLock(endMutex);
+        sendEnd = true;
+        cv.notify_all();
+    };
+    const std::shared_ptr<DBStatusAdapter> statusAdapter = std::make_shared<DBStatusAdapter>();
+    ASSERT_NE(statusAdapter, nullptr);
+    auto adapterStub = std::make_shared<AdapterStub>(DEVICE_NAME_A);
+    IAdapter *adapterPtr = adapterStub.get();
+    ASSERT_NE(adapterPtr, nullptr);
+    auto aggregator = std::make_shared<CommunicatorAggregator>();
+    ASSERT_NE(aggregator, nullptr);
+    // make GetNextRetryInterval return negative so SetTimer fails in RetrySendTask.
+    // static_cast<int32_t>(0x80000000u) is INT32_MIN, divided by RETRY_TIME_SPLIT(4) stays negative.
+    adapterStub->ForkGetTimeout([]() { return 0x80000000u; });
+    std::atomic<int> count = 0;
+    // 1st SendBytes: -E_WAIT_RETRY to trigger RetrySendTask (where SetTimer will fail).
+    // After the retry task is scheduled (DELAY policy set), simulate a sendable callback
+    // (as the failed timer would have done) to re-trigger send.
+    // 2nd SendBytes: -E_INTERNAL_ERROR to end the task.
+    adapterStub->ForkSendBytes([&count, &adapterStub]() {
+        int current = count;
+        count++;
+        if (current == 0) {
+            // delay the sendable callback to ensure RetrySendTaskIfNeed has set DELAY policy
+            std::thread([adapterStub]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                adapterStub->SimulateTriggerSendableCallback(DEVICE_NAME_B, E_OK);
+            }).detach();
+            return -E_WAIT_RETRY;
+        }
+        return -E_INTERNAL_ERROR;
+    });
+    EXPECT_EQ(aggregator->Initialize(adapterPtr, statusAdapter), E_OK);
+    ResFinalizer finalizer([aggregator]() {
+        aggregator->Finalize();
+    });
+    ASSERT_NO_FATAL_FAILURE(TriggerSendMsg(aggregator, onEnd, false));
+    LOGI("[SendFailed003] Begin wait send end");
+    std::unique_lock<std::mutex> uniqueLock(endMutex);
+    cv.wait_for(uniqueLock, std::chrono::seconds(5), [&sendEnd]() { // wait max 5s
+        return sendEnd;
+    });
+    LOGI("[SendFailed003] End wait send end");
+    EXPECT_TRUE(sendEnd);
+    EXPECT_GT(count.load(), 1);
+    adapterStub->ForkSendBytes(nullptr);
+    adapterStub->ForkGetTimeout(nullptr);
+    EXPECT_EQ(aggregator->GetRetryCount(DEVICE_NAME_B, true), 0);
+    EXPECT_EQ(aggregator->GetRetryCount(DEVICE_NAME_B, false), 0);
+}
 #endif

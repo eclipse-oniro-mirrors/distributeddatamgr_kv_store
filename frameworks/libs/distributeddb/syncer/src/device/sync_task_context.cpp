@@ -325,6 +325,7 @@ int SyncTaskContext::StartTimer()
             int ret = RuntimeContext::GetInstance()->ScheduleTask([this]() { RefObject::DecObjRef(this); });
             if (ret != E_OK) {
                 LOGE("[SyncTaskContext] timer finalizer ScheduleTask, errCode %d", ret);
+                RefObject::DecObjRef(this);
             }
         }, timerId);
     if (errCode != E_OK) {

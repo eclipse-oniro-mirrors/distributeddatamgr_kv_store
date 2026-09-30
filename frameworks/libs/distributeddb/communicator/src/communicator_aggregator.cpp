@@ -1135,7 +1135,7 @@ void CommunicatorAggregator::RetrySendTask(const std::string &target, uint64_t s
     }
     TimerId timerId = 0u;
     RefObject::IncObjRef(this);
-    (void)RuntimeContext::GetInstance()->SetTimer(GetNextRetryInterval(target, currentRetryCount),
+    int errCode = RuntimeContext::GetInstance()->SetTimer(GetNextRetryInterval(target, currentRetryCount),
         [this, target, sendSequenceId](TimerId id) {
         if (sendSequenceId == GetSendSequenceId(target)) {
             OnSendable(target);
@@ -1145,6 +1145,10 @@ void CommunicatorAggregator::RetrySendTask(const std::string &target, uint64_t s
         RefObject::DecObjRef(this);
         return -E_END_TIMER;
     }, nullptr, timerId);
+    if (errCode != E_OK) {
+        LOGW("[CommAggr] Retry send task with timer failed %d", errCode);
+        RefObject::DecObjRef(this);
+    }
 }
 
 bool CommunicatorAggregator::IsRetryOutOfLimit(const std::string &target, bool isRetryTask)
