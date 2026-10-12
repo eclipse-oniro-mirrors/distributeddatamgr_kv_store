@@ -359,7 +359,7 @@ inline uint32_t GetDynamicTimeLapseForWaitingAck(uint32_t inRetransmitCount)
     return subsequentRetransmit * subsequentRetransmit * TIME_LAPSE_FOR_WAITING_ACK;
 }
 }
-
+// exit SendLabelExchange should call DecObjRef
 void CommunicatorLinker::SendLabelExchange(const std::string &toTarget, SerialBuffer *inBuff, uint64_t inSequenceId,
     uint32_t inRetransmitCount)
 {
@@ -388,7 +388,6 @@ void CommunicatorLinker::SendLabelExchange(const std::string &toTarget, SerialBu
     }
     if (noNeedToSend) {
         delete inBuff;
-        inBuff = nullptr;
         RefObject::DecObjRef(this); // ATTENTION: The DecObjRef should be outside entireInfoLockGuard!!!
         return;
     }
@@ -407,6 +406,7 @@ void CommunicatorLinker::SendLabelExchange(const std::string &toTarget, SerialBu
         } else {
             LOGE("[Linker][SendLabel] CloneFail: target=%s{private}, SeqId=%" PRIu64 ".",
             toTarget.c_str(), ULL(inSequenceId));
+            RefObject::DecObjRef(this); // exit SendLabelExchange should call DecObjRef
         }
     } else {
         // Send fail, go on to retry send
@@ -416,7 +416,6 @@ void CommunicatorLinker::SendLabelExchange(const std::string &toTarget, SerialBu
             }, TIME_LAPSE_FOR_RETRY_SEND);
         if (error == E_OK) {
             delete cloneBuffer;
-            cloneBuffer = nullptr;
         }
     }
 }

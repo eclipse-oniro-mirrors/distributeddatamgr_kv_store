@@ -27,6 +27,7 @@
 
 namespace DistributedDB {
 using OnSendBytes = std::function<int (void)>;
+using OnGetTimeout = std::function<uint32_t(void)>;
 class AdapterStub : public IAdapter {
 public:
     /*
@@ -88,6 +89,7 @@ public:
     void SimulateSendBitErrorInPaddingLenField(bool doFlag, uint8_t inPaddingLen);
     void SimulateSendBitErrorInMessageIdField(bool doFlag, uint32_t inMessageId);
     void ForkSendBytes(const OnSendBytes &onSendBytes);
+    void ForkGetTimeout(const OnGetTimeout &onGetTimeout);
 
     void SetUserInfo(const std::vector<UserInfo> &userInfo);
     std::vector<UserInfo> GetUserInfo();
@@ -145,6 +147,7 @@ private:
 
     std::mutex sendBytesMutex_;
     OnSendBytes onSendBytes_;
+    OnGetTimeout onGetTimeout_;
 
     std::vector<UserInfo> userInfo_;
 

@@ -62,6 +62,10 @@ uint32_t AdapterStub::GetMtuSize(const std::string &target)
 
 uint32_t AdapterStub::GetTimeout()
 {
+    std::lock_guard<std::mutex> autoLock(sendBytesMutex_);
+    if (onGetTimeout_) {
+        return onGetTimeout_();
+    }
     return STUB_TIME_OUT;
 }
 
@@ -407,6 +411,12 @@ void AdapterStub::ForkSendBytes(const DistributedDB::OnSendBytes &onSendBytes)
 {
     std::lock_guard<std::mutex> autoLock(sendBytesMutex_);
     onSendBytes_ = onSendBytes;
+}
+
+void AdapterStub::ForkGetTimeout(const DistributedDB::OnGetTimeout &onGetTimeout)
+{
+    std::lock_guard<std::mutex> autoLock(sendBytesMutex_);
+    onGetTimeout_ = onGetTimeout;
 }
 
 namespace {

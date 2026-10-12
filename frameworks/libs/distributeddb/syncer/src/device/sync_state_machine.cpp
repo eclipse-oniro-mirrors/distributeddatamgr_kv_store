@@ -255,6 +255,7 @@ bool SyncStateMachine::StartSaveDataNotify(uint32_t sessionId, uint32_t sequence
         saveDataNotifyTimerId_);
     if (errCode != E_OK) {
         LOGW("[SyncStateMachine][SaveDataNotify] start timer failed err %d !", errCode);
+        RefObject::DecObjRef(syncContext_);
         saveDataNotifyRefCount_--;
         return false;
     }
@@ -329,6 +330,7 @@ bool SyncStateMachine::StartFeedDogForSync(uint32_t time, SyncDirectionFlag flag
         watchDogController_[flag].feedDogTimerId);
     if (errCode != E_OK) {
         LOGW("[SyncStateMachine][feedDog] start timer failed err %d !", errCode);
+        RefObject::DecObjRef(syncContext_);
         return false;
     }
     return true;
@@ -470,6 +472,7 @@ void SyncStateMachine::StartFeedDogForGetData(uint32_t sessionId)
         getDataNotifyTimerId_);
     if (errCode != E_OK) {
         LOGW("[SyncStateMachine][StartFeedDogForGetData] start timer failed err %d !", errCode);
+        RefObject::DecObjRef(syncContext_);
     }
 }
 
