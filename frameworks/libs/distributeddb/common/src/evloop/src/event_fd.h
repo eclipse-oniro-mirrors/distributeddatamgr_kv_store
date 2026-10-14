@@ -61,7 +61,7 @@ public:
     void Close()
     {
         if (IsValid()) {
-            CLOSE_HANDLE(fd_);
+            (void)fdsan_close_with_tag(fd_, FDSAN_TAG_DISTRIBUTEDDB);
             fd_ = INVALID_HANDLE;
         }
     }
