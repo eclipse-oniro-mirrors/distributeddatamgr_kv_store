@@ -1444,7 +1444,7 @@ public:
      * @param token, ability's token.
      * @return Returns ERR_OK on success, others on failure.
      */
-    ErrCode DelegatorDoAbilityBackground(sptr<IRemoteObject> token, int32_t userId = -1);
+    ErrCode DelegatorDoAbilityBackground(sptr<IRemoteObject> token);
 
    /**
      * Calls this interface to move the ability to the foreground.
