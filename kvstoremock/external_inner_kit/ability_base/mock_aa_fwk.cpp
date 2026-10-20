@@ -172,7 +172,7 @@ ErrCode AbilityManagerClient::FinishUserTest(const std::string &msg, const int64
                                              const std::string &bundleName) { return 0; }
 ErrCode AbilityManagerClient::GetTopAbility(sptr<IRemoteObject> &token) { return 0; }
 ErrCode AbilityManagerClient::DelegatorDoAbilityForeground(sptr<IRemoteObject> token) { return 0; }
-ErrCode AbilityManagerClient::DelegatorDoAbilityBackground(sptr<IRemoteObject> token, int32_t userId) { return 0; }
+ErrCode AbilityManagerClient::DelegatorDoAbilityBackground(sptr<IRemoteObject> token) { return 0; }
 ErrCode AbilityManagerClient::DoAbilityForeground(sptr<IRemoteObject> token, uint32_t flag) { return 0; }
 ErrCode AbilityManagerClient::DoAbilityBackground(sptr<IRemoteObject> token, uint32_t flag) { return 0; }
 int AbilityManagerClient::SetAbilityController(sptr<AppExecFwk::IAbilityController> abilityController,
