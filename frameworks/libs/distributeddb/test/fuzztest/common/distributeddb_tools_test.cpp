@@ -17,7 +17,6 @@
 #include <cstring>
 #include <dirent.h>
 #include <fstream>
-#include <openssl/rand.h>
 #include <random>
 #include <set>
 #include <sys/types.h>
@@ -120,14 +119,14 @@ void DistributedDBToolsTest::GetRandomKeyValue(std::vector<uint8_t> &value, uint
     uint32_t randSize = 0;
     if (defaultSize == 0) {
         uint8_t simSize = 0;
-        RAND_bytes(&simSize, 1);
+        DBCommon::GetRandomBytes(&simSize, 1);
         randSize = (simSize == 0) ? 1 : simSize;
     } else {
         randSize = defaultSize;
     }
 
     value.resize(randSize);
-    RAND_bytes(value.data(), randSize);
+    DBCommon::GetRandomBytes(value.data(), randSize);
 }
 
 DBStatus DistributedDBToolsTest::SyncTestWithQuery(KvStoreNbDelegate* delegate,

@@ -17,6 +17,7 @@ distributeddb_path =
 declare_args() {
   kv_store_cloud = true
   kv_store_device = true
+  USE_HITLS_GN    = false
 }
 
 distributeddb_src = [
@@ -270,6 +271,7 @@ distributeddb_src = [
   "${distributeddb_path}/syncer/src/sync_operation.cpp",
   "${distributeddb_path}/syncer/src/time_helper.cpp",
   "${distributeddb_path}/syncer/src/time_helper_client.cpp",
+  "${distributeddb_path}/common/src/value_hash_calc.cpp",
 ]
 
 distributeddb_cloud_src = [
@@ -354,6 +356,7 @@ distributeddb_base_src = [
   "${distributeddb_path}/storage/src/sqlite/sqlite_log_table_manager.cpp",
   "${distributeddb_path}/storage/src/sqlite/sqlite_utils_client.cpp",
   "${distributeddb_path}/syncer/src/time_helper_client.cpp",
+  "${distributeddb_path}/common/src/value_hash_calc.cpp",
 ]
 
 distributeddb_client_src = [

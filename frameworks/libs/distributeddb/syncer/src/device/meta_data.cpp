@@ -15,8 +15,6 @@
 
 #include "meta_data.h"
 
-#include <openssl/rand.h>
-
 #include "db_common.h"
 #include "db_constant.h"
 #include "db_errno.h"

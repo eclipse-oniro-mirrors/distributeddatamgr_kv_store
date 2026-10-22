@@ -13,7 +13,6 @@
  * limitations under the License.
  */
 #include <gtest/gtest.h>
-#include <openssl/rand.h>
 
 #include "db_common.h"
 #include "db_errno.h"
@@ -819,7 +818,7 @@ HWTEST_F(DistributedDBStorageQuerySyncTest, DeSerialize001, TestSize.Level1)
      * @tc.expected: step3. return not E_OK
      */
     uint8_t simSize = 0;
-    RAND_bytes(&simSize, 1);
+    DBCommon::GetRandomBytes(&simSize, 1);
     buffer.resize(simSize);
     Parcel readParcel2(buffer.data(), simSize);
     EXPECT_NE(QuerySyncObject::DeSerializeData(readParcel2, queryObj), E_OK);

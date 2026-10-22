@@ -28,6 +28,12 @@
 
 #include "cloud/cloud_db_constant.h"
 #include "cloud/cloud_db_types.h"
+#ifdef USE_HITLS
+#include "crypt_eal_rand.h"
+#include "crypt_errno.h"
+#else
+#include <openssl/rand.h>
+#endif
 #include "db_errno.h"
 #include "param_check_utils.h"
 #include "platform_specific.h"
@@ -823,5 +829,29 @@ void DBCommon::SetCloudSyncConfigProperty(const CloudSyncConfig &from, CloudSync
 bool DBCommon::GreaterEqualThan(const std::string &left, const std::string &right)
 {
     return CmpModifyTime(right, left);
+}
+
+int DBCommon::GetRandomBytes(uint8_t *out, uint32_t len)
+{
+    if (out == nullptr || len == 0) {
+        return -E_INVALID_ARGS;
+    }
+#ifdef USE_HITLS
+    int32_t ret = CRYPT_EAL_RandInit(CRYPT_RAND_SHA256, NULL, NULL, NULL, 0);
+    if (ret != CRYPT_SUCCESS && ret != CRYPT_EAL_ERR_DRBG_REPEAT_INIT) {
+        LOGE("[DBCommon] Init random bytes failed.");
+        return -E_SYSTEM_API_FAIL;
+    }
+    if (CRYPT_EAL_Randbytes(out, len) != CRYPT_SUCCESS) {
+        LOGE("[DBCommon] get random bytes failed.!");
+        return -E_SYSTEM_API_FAIL;
+    }
+#else
+    if (RAND_bytes(out, static_cast<int>(len)) != 1) {
+        LOGE("[DBCommon] get random bytes failed.");
+        return -E_SYSTEM_API_FAIL;
+    }
+#endif
+    return E_OK;
 }
 } // namespace DistributedDB

@@ -15,7 +15,10 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdio>
 #include <thread>
+
+#include "securec.h"
 
 #include "db_errno.h"
 #include "db_common.h"
@@ -1379,5 +1382,31 @@ HWTEST_F(DistributedDBCommonTest, CleanConcurrent001, TestSize.Level0)
         thread.join();
     }
     RuntimeConfig::Clean();
+}
+
+/**
+ * @tc.name: CalHash001
+ * @tc.desc: Test hashvalue calculation correctness
+ * @tc.type: FUNC
+ * @tc.author: ztx
+ */
+HWTEST_F(DistributedDBCommonTest, CalHash001, TestSize.Level0)
+{
+    const std::string input = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const std::string expect = "55096575e898b352eb40de70e586ecfff8837d05f1cedc80dc3d7b48583d4ce6";
+
+    std::vector<uint8_t> inputVec(input.begin(), input.end());
+    std::vector<uint8_t> hashvec;
+    int errCode = DBCommon::CalcValueHash(inputVec, hashvec);
+    EXPECT_EQ(errCode, E_OK);
+
+    // 转 hex与期望值比对
+    std::string hashHex;
+    for (uint8_t byte : hashvec) {
+        char buf[3];
+        (void)snprintf_s(buf, sizeof(buf), sizeof(buf) - 1, "%02x", byte);
+        hashHex += buf;
+    }
+    EXPECT_EQ(hashHex, expect);
 }
 }

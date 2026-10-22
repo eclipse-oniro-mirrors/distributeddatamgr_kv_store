@@ -65,6 +65,8 @@ public:
 
     static int GetHashString(const std::string &str, std::string &dst);
 
+    static int GetRandomBytes(uint8_t *out, uint32_t len);
+    
     static int CreateStoreDirectory(const std::string &directory, const std::string &identifierName,
         const std::string &subDir, bool isCreate);
 
