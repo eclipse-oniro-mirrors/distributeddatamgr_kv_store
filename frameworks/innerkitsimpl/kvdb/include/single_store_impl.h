@@ -27,6 +27,7 @@
 #include "kvstore_death_recipient.h"
 #include "observer_bridge.h"
 #include "single_kvstore.h"
+#include "shrink_manager.h"
 #include "sync_observer.h"
 #include "task_executor.h"
 
@@ -103,6 +104,7 @@ public:
     Status UnsubscribeWithQuery(const std::vector<std::string> &devices, const DataQuery &query) override;
     Status CloudSync(const AsyncDetail &async) override;
     Status SetConfig(const StoreConfig &storeConfig) override;
+    Status SetShrinkEnable(bool enable) override;
 protected:
     std::shared_ptr<ObserverBridge> PutIn(uint32_t &realType, std::shared_ptr<Observer> observer);
     std::shared_ptr<ObserverBridge> TakeOut(uint32_t &realType, std::shared_ptr<Observer> observer);
@@ -168,6 +170,7 @@ private:
     std::mutex notifyMutex_;
     uint64_t notifyExpiredTime_ = 0;
     std::shared_ptr<DBStore> dbStore_ = nullptr;
+    std::unique_ptr<ShrinkManager> shrinkManager_ = nullptr;
     std::shared_ptr<SyncObserver> syncObserver_ = nullptr;
     ConcurrentMap<uintptr_t, std::pair<uint32_t, std::shared_ptr<ObserverBridge>>> observers_;
     ConcurrentMap<uint64_t, AsyncFunc> asyncFuncs_;

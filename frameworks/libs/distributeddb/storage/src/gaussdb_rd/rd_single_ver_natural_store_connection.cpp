@@ -193,6 +193,8 @@ int RdSingleVerNaturalStoreConnection::Pragma(int cmd, void *parameter)
             return ForceCheckPoint();
         case PRAGMA_GET_PAGE_SIZE:
             return GetPageSize(parameter);
+        case PRAGMA_SHRINK:
+            return Shrink();
         default:
             break;
     }
@@ -225,6 +227,20 @@ int RdSingleVerNaturalStoreConnection::ForceCheckPoint() const
     }
 
     errCode = handle->ForceCheckPoint();
+    ReleaseExecutor(handle);
+    return errCode;
+}
+
+int RdSingleVerNaturalStoreConnection::Shrink() const
+{
+    int errCode = E_OK;
+    RdSingleVerStorageExecutor *handle = GetExecutor(false, errCode);
+    if (handle == nullptr) {
+        LOGE("[Connection]::[Shrink] Get executor failed, errCode = [%d]", errCode);
+        return errCode;
+    }
+
+    errCode = handle->Shrink();
     ReleaseExecutor(handle);
     return errCode;
 }

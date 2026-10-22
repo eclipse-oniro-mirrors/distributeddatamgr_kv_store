@@ -354,6 +354,23 @@ public:
     }
 
     /**
+     * @brief Enable or disable database file shrink (space reclamation).
+     *
+     * When enabled, Delete/DeleteBatch triggers threshold monitoring and
+     * automatically reclaims free space in the database file when the
+     * threshold is reached. When disabled, pending reclaim tasks are
+     * cancelled and subsequent deletes do not trigger reclamation.
+     * Default is disabled (backward compatible).
+     *
+     * @param enable True to enable shrink, false to disable.
+     * @return Return SUCCESS for success, others for failure.
+     */
+    virtual Status SetShrinkEnable(bool enable)
+    {
+        return Status::NOT_SUPPORT;
+    }
+
+    /**
      * @brief get database status.
      * @return Return true for db rebuild.
      */

@@ -275,6 +275,15 @@ int RdFlush(GRD_DB *db, uint32_t flags)
     return TransferGrdErrno(GRD_Flush(db, flags));
 }
 
+int RdShrink(GRD_DB *db, uint32_t flags)
+{
+    if (db == nullptr) {
+        LOGE("[rdUtils][RdShrink] invalid db");
+        return -E_INVALID_DB;
+    }
+    return TransferGrdErrno(GRD_Flush(db, GRD_DB_FLUSH_SYNC));
+}
+
 int RdKVBatchDel(GRD_DB *db, const char *kvTableName, GRD_KVBatchT *batch)
 {
     if (db == nullptr) {

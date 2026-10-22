@@ -70,6 +70,7 @@ kvdb_source_config = [
   "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/observer_bridge.cpp",
   "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/security_manager.cpp",
   "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/single_store_impl.cpp",
+  "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/shrink_manager.cpp",
   "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/store_factory.cpp",
   "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/store_manager.cpp",
   "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/store_result_set.cpp",

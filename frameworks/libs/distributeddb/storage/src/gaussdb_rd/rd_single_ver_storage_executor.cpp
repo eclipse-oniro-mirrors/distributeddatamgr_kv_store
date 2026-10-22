@@ -373,6 +373,11 @@ int RdSingleVerStorageExecutor::ForceCheckPoint() const
     return RdFlush(db_, 0);
 }
 
+int RdSingleVerStorageExecutor::Shrink() const
+{
+    return RdShrink(db_, GRD_DB_FLUSH_SYNC);
+}
+
 int RdSingleVerStorageExecutor::GetPageSize(int &pageSize) const
 {
     if (db_ == nullptr) {

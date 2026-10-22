@@ -70,6 +70,8 @@ int RdKVBatchPut(GRD_DB *db, const char *kvTableName, GRD_KVBatchT *batch);
 
 int RdFlush(GRD_DB *db, uint32_t flags);
 
+int RdShrink(GRD_DB *db, uint32_t flags);
+
 // if delete key is not exist in db, return errCode is OK.
 int RdKVBatchDel(GRD_DB *db, const char *kvTableName, GRD_KVBatchT *batch);
 

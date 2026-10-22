@@ -64,6 +64,15 @@ SingleStoreImpl::SingleStoreImpl(
             BackupManager::GetInstance().Prepare(path, storeId_);
         }
     }
+    std::weak_ptr<DBStore> weakDb = dbStore_;
+    shrinkManager_ = std::make_unique<ShrinkManager>([weakDb]() {
+        auto db = weakDb.lock();
+        if (db == nullptr) {
+            return;
+        }
+        DistributedDB::PragmaData data = nullptr;
+        db->Pragma(DistributedDB::SHRINK, data);
+    });
 }
 
 SingleStoreImpl::~SingleStoreImpl()
@@ -93,6 +102,25 @@ Status SingleStoreImpl::RetryWithCheckPoint(std::function<DistributedDB::DBStatu
     dbStore_->Pragma(DistributedDB::EXEC_CHECKPOINT, data);
     dbStatus = lambda();
     return StoreUtil::ConvertStatus(dbStatus);
+}
+
+Status SingleStoreImpl::SetShrinkEnable(bool enable)
+{
+    DdsTrace trace(std::string(LOG_TAG "::") + std::string(__FUNCTION__));
+    std::shared_lock<decltype(rwMutex_)> lock(rwMutex_);
+    if (dbStore_ == nullptr) {
+        ZLOGE("db:%{public}s already closed!", StoreUtil::Anonymous(storeId_).c_str());
+        return ALREADY_CLOSED;
+    }
+    if (shrinkManager_ == nullptr) {
+        return Status::ERROR;
+    }
+    if (enable) {
+        shrinkManager_->Enable();
+    } else {
+        shrinkManager_->Disable();
+    }
+    return SUCCESS;
 }
 
 Status SingleStoreImpl::Put(const Key &key, const Value &value)
@@ -174,6 +202,9 @@ Status SingleStoreImpl::Delete(const Key &key)
         ReportDBFaultEvent(status, std::string(__FUNCTION__));
         ZLOGE("status:0x%{public}x key:%{public}s", status, StoreUtil::Anonymous(key.ToString()).c_str());
     }
+    if (status == SUCCESS && shrinkManager_ != nullptr) {
+        shrinkManager_->OnDelete();
+    }
     DoAutoSync();
     DoNotifyChange();
     return status;
@@ -202,6 +233,9 @@ Status SingleStoreImpl::DeleteBatch(const std::vector<Key> &keys)
     if (status != SUCCESS) {
         ReportDBFaultEvent(status, std::string(__FUNCTION__));
         ZLOGE("status:0x%{public}x keys size:%{public}zu", status, keys.size());
+    }
+    if (status == SUCCESS && shrinkManager_ != nullptr) {
+        shrinkManager_->OnDelete();
     }
     DoAutoSync();
     DoNotifyChange();

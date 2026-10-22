@@ -64,6 +64,7 @@ namespace {
         {REMOVE_LOCAL_DATA_BY_KEY_PATTERN, PRAGMA_REMOVE_LOCAL_DATA_BY_KEY_PATTERN},
         {SET_HIGH_PERFORMANCE_READ_MODE, PRAGMA_SET_HIGH_PERFORMANCE_READ_MODE},
         {GET_PAGE_SIZE, PRAGMA_GET_PAGE_SIZE},
+        {SHRINK, PRAGMA_SHRINK},
     };
 
     constexpr const char *INVALID_CONNECTION = "[KvStoreNbDelegate] Invalid connection for operation";
