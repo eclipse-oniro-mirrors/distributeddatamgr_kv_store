@@ -22,11 +22,9 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <locale>
-#include <openssl/rand.h>
 #include <random>
 #include <set>
 #include <sys/types.h>
-
 #include "cloud/cloud_db_constant.h"
 #include "cloud/cloud_db_sync_utils_test.h"
 #include "cloud/cloud_db_types.h"
@@ -281,14 +279,24 @@ void DistributedDBToolsUnitTest::GetRandomKeyValue(std::vector<uint8_t> &value, 
     uint32_t randSize = 0;
     if (defaultSize == 0) {
         uint8_t simSize = 0;
-        RAND_bytes(&simSize, 1);
-        randSize = (simSize == 0) ? 1 : simSize;
+        int ret = DBCommon::GetRandomBytes(&simSize, 1);
+        if (ret != E_OK) {
+            randSize = 1;
+        } else {
+            randSize = (simSize == 0) ? 1 : simSize;
+        }
     } else {
         randSize = defaultSize;
     }
-
     value.resize(randSize);
-    RAND_bytes(value.data(), randSize);
+    const int maxRetry = 3;
+    int ret = DBCommon::GetRandomBytes(value.data(), randSize);
+    for (int i = 0; ret != E_OK && i < maxRetry; ++i) {
+        ret = DBCommon::GetRandomBytes(value.data(), randSize);
+    }
+    if (ret != E_OK) {
+        LOGE("[DistributedDBToolsUnitTest] GetRandomBytes failed after retry, value is all-zero");
+    }
 }
 
 bool DistributedDBToolsUnitTest::IsValueEqual(const DistributedDB::Value &read, const DistributedDB::Value &origin)

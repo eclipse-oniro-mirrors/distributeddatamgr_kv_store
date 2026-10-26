@@ -16,9 +16,9 @@
 #include <chrono>
 #include <functional>
 #include <gtest/gtest.h>
-#include <openssl/rand.h>
 #include <thread>
 
+#include "db_common.h"
 #include "db_types.h"
 #include "log_print.h"
 #include "securec.h"
@@ -310,7 +310,7 @@ public:
 void DistributedDBStorageEncryptTest::SetUpTestCase(void)
 {
     unsigned char initialByte = 0;
-    RAND_bytes(&initialByte, 1);
+    DBCommon::GetRandomBytes(&initialByte, 1);
     for (int i = 0; i < PASSWD_TEST_SIZE; i++) {
         initialByte %= 20; // keep the number < 20, so 'A' + 20 is the maximum alphabet.
         g_oldPasswd[i] = ('A' + initialByte++);

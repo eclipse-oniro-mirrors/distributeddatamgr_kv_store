@@ -16,9 +16,10 @@
 #ifndef OMIT_MULTI_VER
 #include "multi_ver_storage_executor.h"
 
-#include <openssl/rand.h>
 
+#include "crypt_eal_rand.h"
 #include "db_common.h"
+#include "db_constant.h"
 #include "db_errno.h"
 #include "log_print.h"
 #include "multi_ver_natural_store.h"
@@ -538,7 +539,7 @@ int MultiVerStorageExecutor::MergeCommits(const std::vector<MultiVerCommitNode> 
 {
     const MultiVerCommitNode &rootCommitNode = commits.back();
     std::string rootNodeDeviceInfo = rootCommitNode.deviceInfo;
-    if (rootNodeDeviceInfo.size() != SHA256_DIGEST_LENGTH + MULTI_VER_TAG_SIZE) {
+    if (rootNodeDeviceInfo.size() != DBConstant::SHA256_DIGEST_LENGTH + MULTI_VER_TAG_SIZE) {
         return -E_UNEXPECTED_DATA;
     }
     int errCode = StartTransaction();
@@ -552,13 +553,14 @@ int MultiVerStorageExecutor::MergeCommits(const std::vector<MultiVerCommitNode> 
     }
     for (const auto &item : commits) {
         // only need to merge the node data which is from the same device
-        if (item.deviceInfo.size() != SHA256_DIGEST_LENGTH + MULTI_VER_TAG_SIZE &&
+        if (item.deviceInfo.size() != DBConstant::SHA256_DIGEST_LENGTH + MULTI_VER_TAG_SIZE &&
             item.deviceInfo.size() != MULTI_VER_TAG_SIZE) {
             errCode = -E_UNEXPECTED_DATA;
             break;
         }
         if (item.deviceInfo.size() == MULTI_VER_TAG_SIZE ||
-            item.deviceInfo.compare(0, SHA256_DIGEST_LENGTH, rootNodeDeviceInfo, 0, SHA256_DIGEST_LENGTH) != 0) {
+            item.deviceInfo.compare(0, DBConstant::SHA256_DIGEST_LENGTH, rootNodeDeviceInfo, 0,
+                DBConstant::SHA256_DIGEST_LENGTH) != 0) {
             LOGD("Skip the version:%" PRIu64, item.version);
             continue;
         }
@@ -1163,7 +1165,10 @@ int MultiVerStorageExecutor::AllocNewCommitId(CommitID &commitId) const
 {
     // Only for allocate for temporary.
     commitId.resize(COMMIT_ID_LENGTH);
-    RAND_bytes(commitId.data(), COMMIT_ID_LENGTH);
+    int errCode = CRYPT_EAL_RandBytes(commitId.data(), COMMIT_ID_LENGTH);
+    if (errCode != E_OK) {
+        return errCode;
+    }
     return E_OK;
 }
 
@@ -1181,7 +1186,11 @@ int MultiVerStorageExecutor::FillAndCommitLogEntry(const Version &versionInfo, C
         return errCode;
     }
 
-    (void)(AllocNewCommitId(commitId));
+    errCode = AllocNewCommitId(commitId);
+    if (errCode != E_OK) {
+        LOGE("Failed to alloc the commit id:%d", errCode);
+        goto END;
+    }
     std::vector<uint8_t> vectTag;
     static_cast<MultiVerNaturalStore *>(kvDB_)->GetCurrentTag(vectTag);
     std::string strTag(vectTag.begin(), vectTag.end());
@@ -1263,7 +1272,11 @@ int MultiVerStorageExecutor::FillAndCommitLogEntry(const Version &versionInfo,
     }
 
     if (isMerge) {
-        (void)(AllocNewCommitId(commitId));
+        errCode = AllocNewCommitId(commitId);
+        if (errCode != E_OK) {
+            LOGE("Failed to alloc the commit id:%d", errCode);
+            goto END;
+        }
     }
 
     errCode = FillCommitByForeign(commit, multiVerCommit, versionInfo, commitId, isMerge);

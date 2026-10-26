@@ -54,6 +54,7 @@
         "bounds_checking_function",
         "libuv",
         "openssl",
+        "openhitls",
         "sqlite"
       ],
       "kernel_special": {},
@@ -83,6 +84,7 @@
         "napi",
         "node",
         "openssl",
+        "openhitls",
         "qos_manager",
         "runtime_core",
         "safwk",

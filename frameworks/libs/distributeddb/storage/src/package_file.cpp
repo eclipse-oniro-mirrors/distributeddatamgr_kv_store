@@ -21,6 +21,7 @@
 #include "value_hash_calc.h"
 #include "parcel.h"
 #include "platform_specific.h"
+#include "db_constant.h"
 
 namespace DistributedDB {
 using std::string;
@@ -33,9 +34,9 @@ using std::ios_base;
 
 namespace {
     constexpr uint32_t MAX_FILE_NAME_LEN = 256;
-    constexpr uint32_t CHECKSUM_LEN = SHA256_DIGEST_LENGTH;
+    constexpr uint32_t CHECKSUM_LEN = DBConstant::SHA256_DIGEST_LENGTH;
     constexpr uint32_t CHECKSUM_BLOCK_SIZE = 64;
-    constexpr uint32_t DEVICE_ID_LEN = SHA256_DIGEST_LENGTH;
+    constexpr uint32_t DEVICE_ID_LEN = DBConstant::SHA256_DIGEST_LENGTH;
     constexpr uint32_t MAGIC_LEN = 16;
     constexpr uint32_t CURRENT_VERSION = 0;
     constexpr uint64_t BUFFER_LEN = 4096;

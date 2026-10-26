@@ -220,6 +220,8 @@ public:
     static constexpr const char SEPARATOR = '/';
 
     static constexpr const uint64_t TIME_SECOND_TO_NS = 1000000000;
+
+    static constexpr const int SHA256_DIGEST_LENGTH = 32; // size of SHA256_DIGEST_LENGTH
 };
 } // namespace DistributedDB
 #endif // DISTRIBUTEDDB_CONSTANT_H

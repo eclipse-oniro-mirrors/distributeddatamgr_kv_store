@@ -16,7 +16,6 @@
 #include <cstdlib>
 #include <ctime>
 #include <gtest/gtest.h>
-#include <openssl/rand.h>
 #include <string>
 #include <thread>
 
@@ -96,7 +95,7 @@ static int RunSyncMergeForOneCommit(std::vector<MultiVerKvEntry *> &entries)
 {
     MultiVerCommitNode multiVerCommit;
     multiVerCommit.commitId.resize(20); // 20 as commit id size
-    RAND_bytes(multiVerCommit.commitId.data(), 20);
+    DBCommon::GetRandomBytes(multiVerCommit.commitId.data(), 20);
     multiVerCommit.deviceInfo = DBCommon::TransferHashString("deviceB") + "deviceB1";
 
     // Put the multiver commit of other device.
@@ -1019,7 +1018,7 @@ HWTEST_F(DistributedDBStorageTransactionDataTest, TransactionPutForeignData001, 
      */
     MultiVerCommitNode multiVerCommit;
     multiVerCommit.commitId.resize(20); // commit id size
-    RAND_bytes(multiVerCommit.commitId.data(), 20);
+    DBCommon::GetRandomBytes(multiVerCommit.commitId.data(), 20);
     multiVerCommit.deviceInfo = DBCommon::TransferHashString("deviceB") + "deviceB1";
     /**
      * @tc.steps: step2. Put the multiver commit of other device.
@@ -1365,7 +1364,7 @@ static bool PutFirstSyncCommitData(MultiVerCommitNode &multiVerCommit)
      * @tc.steps: step1. Create the multiver commit.
      */
     multiVerCommit.commitId.resize(20); // commit id size
-    RAND_bytes(multiVerCommit.commitId.data(), 20); // commit id size
+    DBCommon::GetRandomBytes(multiVerCommit.commitId.data(), 20); // 20 is commit id size
     multiVerCommit.deviceInfo = DBCommon::TransferHashString("deviceB") + "deviceB1";
     multiVerCommit.timestamp = 1000UL; // the first data timestamp.
     /**
@@ -1395,7 +1394,7 @@ static bool PutSecondSyncCommitData(const MultiVerCommitNode &multiVerCommit, Mu
     entries.push_back(&entry);
 
     newCommit.commitId.resize(20); // commit id size
-    RAND_bytes(newCommit.commitId.data(), 20); // commit id size.
+    DBCommon::GetRandomBytes(newCommit.commitId.data(), 20); // 20 is commit id size.
     newCommit.leftParent = multiVerCommit.commitId;
     newCommit.deviceInfo = DBCommon::TransferHashString("deviceB") + "deviceB1";
     newCommit.timestamp = 2000UL; // bigger than the first one.

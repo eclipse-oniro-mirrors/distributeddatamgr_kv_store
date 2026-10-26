@@ -17,8 +17,8 @@
 #include "multi_ver_natural_store.h"
 
 #include <cstdio>
-#include <openssl/rand.h>
 
+#include "crypt_eal_rand.h"
 #include "securec.h"
 
 #include "db_constant.h"
@@ -109,10 +109,14 @@ namespace {
     {
         VersionFileBlock block;
         block.version = version;
+        int errCode = E_OK;
     #ifdef SQLITE_HAS_CODEC
-        RAND_bytes(block.tag, sizeof(block.tag));
+        errCode = CRYPT_EAL_RandBytes(block.tag, sizeof(block.tag));
+        if (errCode != E_OK) {
+            return errCode;
+        }
     #endif
-        int errCode = memset_s(block.reserved, sizeof(block.reserved), 0, sizeof(block.reserved));
+        errCode = memset_s(block.reserved, sizeof(block.reserved), 0, sizeof(block.reserved));
         if (errCode != EOK) {
             return -E_SECUREC_ERROR;
         }
@@ -164,7 +168,10 @@ namespace {
         block.version = version;
 
         if (isChangeTag) {
-            RAND_bytes(block.tag, sizeof(block.tag));
+            errCode = CRYPT_EAL_RandBytes(block.tag, sizeof(block.tag));
+            if (errCode != E_OK) {
+                goto END;
+            }
             tag.assign(block.tag, block.tag + sizeof(block.tag));
         }
 

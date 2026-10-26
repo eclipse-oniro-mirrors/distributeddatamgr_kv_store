@@ -13,7 +13,6 @@
  * limitations under the License.
  */
 #include <gtest/gtest.h>
-#include <openssl/rand.h>
 
 #include "db_common.h"
 #include "db_errno.h"

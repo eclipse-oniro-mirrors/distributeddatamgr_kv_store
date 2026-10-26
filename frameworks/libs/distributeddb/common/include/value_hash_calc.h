@@ -17,71 +17,22 @@
 #define VALUE_HASH_CALC_H
 
 #include <vector>
-
-#include <openssl/sha.h>
-
 #include "db_types.h"
-#include "db_errno.h"
-#include "log_print.h"
 
 namespace DistributedDB {
 class ValueHashCalc {
 public:
-    ValueHashCalc() {};
-    ~ValueHashCalc()
-    {
-        if (context_ != nullptr) {
-            delete context_;
-            context_ = nullptr;
-        }
-    }
-
-    int Initialize()
-    {
-        context_ = new (std::nothrow) SHA256_CTX;
-        if (context_ == nullptr) {
-            return -E_OUT_OF_MEMORY;
-        }
-
-        int errCode = SHA256_Init(context_);
-        if (errCode == 0) {
-            LOGE("sha init failed:%d", errCode);
-            return -E_CALC_HASH;
-        }
-        return E_OK;
-    }
-
-    int Update(const std::vector<uint8_t> &value)
-    {
-        if (context_ == nullptr) {
-            return -E_CALC_HASH;
-        }
-        int errCode = SHA256_Update(context_, value.data(), value.size());
-        if (errCode == 0) {
-            LOGE("sha update failed:%d", errCode);
-            return -E_CALC_HASH;
-        }
-        return E_OK;
-    }
-
-    int GetResult(std::vector<uint8_t> &value)
-    {
-        if (context_ == nullptr) {
-            return -E_CALC_HASH;
-        }
-
-        value.resize(SHA256_DIGEST_LENGTH);
-        int errCode = SHA256_Final(value.data(), context_);
-        if (errCode == 0) {
-            LOGE("sha get result failed:%d", errCode);
-            return -E_CALC_HASH;
-        }
-
-        return E_OK;
-    }
+    ValueHashCalc();
+    ~ValueHashCalc();
+    ValueHashCalc(const ValueHashCalc &) = delete;
+    ValueHashCalc &operator=(const ValueHashCalc &) = delete;
+    int Initialize() const;
+    int Update(const std::vector<uint8_t> &value) const;
+    int GetResult(std::vector<uint8_t> &value) const;
 
 private:
-    SHA256_CTX *context_ = nullptr;
+    struct ValueHashCalcContext;
+    ValueHashCalcContext *context_;
 };
 }
 

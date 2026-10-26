@@ -17,14 +17,17 @@
 #endif
 #include <fstream>
 #include <mutex>
-#include <openssl/sha.h>
-#include <openssl/crypto.h>
 #include <string>
 #include <sys/time.h>
 #include <thread>
 #include <variant>
 #include <vector>
 
+#ifdef USE_HITLS
+#include "crypt_eal_init.h"
+#else
+#include <openssl/crypto.h>
+#endif
 #include "cloud/cloud_db_constant.h"
 #include "relational/data_donation_utils.h"
 #include "db_common.h"
@@ -2055,7 +2058,11 @@ void Clean(bool isOpenSslClean)
 {
     LOGI("[Clean] ssl:%d", isOpenSslClean);
     if (isOpenSslClean) {
+#ifdef USE_HITLS
+        CRYPT_EAL_Cleanup(CRYPT_EAL_INIT_ALL);
+#else
         OPENSSL_cleanup();
+#endif
     }
     Logger::DeleteInstance();
     TimeHelperManager::DestroyInstance();

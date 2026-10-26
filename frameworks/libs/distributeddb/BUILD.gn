@@ -73,6 +73,14 @@ config("distrdb_config") {
   if (kv_store_device) {
     defines += [ "USE_DISTRIBUTEDDB_DEVICE" ]
   }
+  if (is_ohos && !is_arkui_x &&
+      defined(global_parts_info) &&
+      defined(global_parts_info.thirdparty_openhitls)) {
+    USE_HITLS_GN = global_parts_info.thirdparty_openhitls
+  }
+  if (USE_HITLS_GN) {
+    defines += [ "USE_HITLS" ]
+  }
 }
 
 config("distrdb_public_config") {
@@ -142,9 +150,18 @@ ohos_shared_library("distributeddb") {
     "bounds_checking_function:libsec_shared",
     "jsoncpp:jsoncpp",
     "zlib:shared_libz",
-    "openssl:libcrypto_shared",
     "sqlite:sqlite",
   ]
+  if (is_ohos && !is_arkui_x &&
+      defined(global_parts_info) &&
+      defined(global_parts_info.thirdparty_openhitls)) {
+    USE_HITLS_GN = global_parts_info.thirdparty_openhitls
+  }
+  if (USE_HITLS_GN) {
+    external_deps += [ "openhitls:openhitls_bsl", "openhitls:openhitls_crypto" ]
+  } else {
+    external_deps += [ "openssl:libcrypto_shared" ]
+  }
   if (is_ohos && is_standard_system && !is_arkui_x &&
       defined(global_parts_info) &&
       defined(global_parts_info.resourceschedule_qos_manager)) {
@@ -276,6 +293,14 @@ config("distributeddb_client_config") {
   if (kv_store_device) {
     defines += [ "USE_DISTRIBUTEDDB_DEVICE" ]
   }
+  if (is_ohos && !is_arkui_x &&
+      defined(global_parts_info) &&
+      defined(global_parts_info.thirdparty_openhitls)) {
+    USE_HITLS_GN = global_parts_info.thirdparty_openhitls
+  }
+  if (USE_HITLS_GN) {
+    defines += [ "USE_HITLS" ]
+  }
 }
 
 ohos_shared_library("distributeddb_client") {
@@ -321,9 +346,18 @@ ohos_shared_library("distributeddb_client") {
     "c_utils:utils",
     "bounds_checking_function:libsec_shared",
     "jsoncpp:jsoncpp",
-    "openssl:libcrypto_shared",
     "sqlite:sqlite",
   ]
+  if (is_ohos && !is_arkui_x &&
+      defined(global_parts_info) &&
+      defined(global_parts_info.thirdparty_openhitls)) {
+    USE_HITLS_GN = global_parts_info.thirdparty_openhitls
+  }
+  if (USE_HITLS_GN) {
+    external_deps += [ "openhitls:openhitls_bsl", "openhitls:openhitls_crypto" ]
+  } else {
+    external_deps += [ "openssl:libcrypto_shared" ]
+  }
   if (is_ohos && is_standard_system && !is_arkui_x &&
       defined(global_parts_info) &&
       defined(global_parts_info.resourceschedule_qos_manager)) {
