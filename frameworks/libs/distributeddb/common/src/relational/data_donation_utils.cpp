@@ -740,7 +740,7 @@ int DataDonationUtils::UpdateMatrixFile(const MatrixFileInfo &fileInfo,
 {
     std::vector<uint64_t> indexList = DataDonationUtils::GetMatrixTableIndexs(fileInfo, changedData, config);
     if (indexList.empty()) {
-        LOGI("[UpdateMatrixFile] No change, changed data size:%zu, isFull:%d", changedData.size(), config.isFullSync);
+        LOGD("[UpdateMatrixFile] No change, changed data size:%zu, isFull:%d", changedData.size(), config.isFullSync);
         return E_OK;
     }
 
@@ -1385,7 +1385,7 @@ MonitorTablesConfig *DataDonationUtils::BinlogSchemaGet(const char *dbPath, cons
         return nullptr;
     }
 
-    LOGI("[BinlogSchemaGet] Start get schema.");
+    LOGD("[BinlogSchemaGet] Start get schema.");
     MonitorTablesConfig *monitorConfig = static_cast<MonitorTablesConfig*>(malloc(sizeof(MonitorTablesConfig)));
     if (monitorConfig == nullptr) {
         LOGE("BinlogSchemaGet: malloc monitorConfig failed");

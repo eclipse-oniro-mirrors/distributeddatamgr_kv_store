@@ -92,7 +92,7 @@ void SqliteCloudKvExecutorUtils::UpdateBeginTime(SQLiteSingleVerContinueToken &t
         token.SetNextBeginTime("", maxTimeStamp);
         return;
     }
-    LOGW("[SqliteCloudKvExecutorUtils] The start time of the database has not been updated.");
+    LOGD("[SqliteCloudKvExecutorUtils] The start time of the database has not been updated.");
 }
 
 int SqliteCloudKvExecutorUtils::GetCloudDataForSync(const CloudSyncConfig &config, const CloudUploadRecorder &recorder,

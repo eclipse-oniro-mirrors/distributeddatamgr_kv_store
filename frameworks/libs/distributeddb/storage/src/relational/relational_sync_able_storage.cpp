@@ -769,7 +769,7 @@ int RelationalSyncAbleStorage::RegisterObserverAction(uint64_t connectionId, con
     } else {
         dataChangeCallbackMap_[connectionId][observer] = action;
     }
-    LOGI("register relational observer ok");
+    LOGD("register relational observer ok");
     return E_OK;
 }
 

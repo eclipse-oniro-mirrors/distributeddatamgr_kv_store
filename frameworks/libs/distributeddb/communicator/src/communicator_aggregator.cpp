@@ -1080,7 +1080,7 @@ void CommunicatorAggregator::TriggerSendData()
     }
     RefObject::IncObjRef(this);
     int errCode = RuntimeContext::GetInstance()->ScheduleTask([this]() {
-        LOGI("[CommAggr] Send thread start.");
+        LOGI("Send start.");
         while (!shutdown_ && scheduler_.GetNoDelayTaskCount() != 0) {
             SendOnceData();
         }
@@ -1093,7 +1093,7 @@ void CommunicatorAggregator::TriggerSendData()
         }
         finalizeCv_.notify_one();
         RefObject::DecObjRef(this);
-        LOGI("[CommAggr] Send thread end.");
+        LOGI("Send end.");
     });
     if (errCode != E_OK) {
         LOGW("[CommAggr] Trigger send data failed %d", errCode);

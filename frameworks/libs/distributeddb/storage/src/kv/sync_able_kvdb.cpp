@@ -212,7 +212,7 @@ int SyncAbleKvDB::StartSyncerWithNoLock(bool isCheckSyncActive, bool isNeedActiv
             UserChangeMonitor::USER_ACTIVE_EVENT : UserChangeMonitor::USER_NON_ACTIVE_EVENT;
         userChangeListener_ = RuntimeContext::GetInstance()->RegisterUserChangedListener(
             [this](void *) { UserChangeHandle(); }, event);
-        LOGI("[KVDB] [StartSyncerWithNoLock] [%.3s] event=%d", label.c_str(), event);
+        LOGD("[KVDB] [StartSyncerWithNoLock] [%.3s] event=%d", label.c_str(), event);
     }
     return errCode;
 }
