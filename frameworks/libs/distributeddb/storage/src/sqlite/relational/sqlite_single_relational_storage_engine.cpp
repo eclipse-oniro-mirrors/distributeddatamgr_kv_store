@@ -234,7 +234,7 @@ int SQLiteSingleRelationalStorageEngine::CreateDistributedTable(const CreateDist
     tableInfo.SetCloudTable(param.cloudTable);
     bool isUpgraded = false;
     if (DBCommon::CaseInsensitiveCompare(tableInfo.GetTableName(), tableName)) {
-        LOGI("distributed table bas been created.");
+        LOGI("upgrade dtable.");
         if (schema.GetTable(tableName).GetTableSyncType() != syncType) {
             LOGE("table sync type mismatch.");
             return -E_TYPE_MISMATCH;

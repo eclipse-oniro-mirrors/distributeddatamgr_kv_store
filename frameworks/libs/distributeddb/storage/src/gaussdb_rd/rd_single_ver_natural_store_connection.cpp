@@ -292,7 +292,7 @@ int RdSingleVerNaturalStoreConnection::Get(const IOption &option, const Key &key
             Timestamp recordTimestamp;
             errCode = writeHandle_->GetKvData(dataType, key, value, recordTimestamp);
             if (errCode != E_OK) {
-                LOGE("[RdSingleVerStorageExecutor][Get] Cannot get the data %d", errCode);
+                LOGE("[RdExecutor][Get] Cannot get the data %d", errCode);
             }
             DBDfxAdapter::FinishTracing();
             return errCode;
@@ -307,7 +307,7 @@ int RdSingleVerNaturalStoreConnection::Get(const IOption &option, const Key &key
     Timestamp timestamp;
     errCode = handle->GetKvData(dataType, key, value, timestamp);
     if (errCode != E_OK) {
-        LOGE("[RdSingleVerStorageExecutor][Get] Cannot get the data %d", errCode);
+        LOGE("[RdExecutor][Get] Cannot get the data %d", errCode);
     }
     ReleaseExecutor(handle);
     DBDfxAdapter::FinishTracing();
