@@ -549,6 +549,27 @@ Status SingleStoreImpl::GetSecurityLevel(SecurityLevel &secLevel) const
     return status;
 }
 
+Status SingleStoreImpl::GetPageSize(int &pageSize) const
+{
+    DdsTrace trace(std::string(LOG_TAG "::") + std::string(__FUNCTION__));
+    std::shared_lock<decltype(rwMutex_)> lock(rwMutex_);
+    if (dbStore_ == nullptr) {
+        ZLOGE("db:%{public}s already closed!", StoreUtil::Anonymous(storeId_).c_str());
+        return ALREADY_CLOSED;
+    }
+ 
+    int dbPageSize = 0;
+    DistributedDB::PragmaData paramData = static_cast<DistributedDB::PragmaData>(&dbPageSize);
+    auto dbStatus = dbStore_->Pragma(DistributedDB::GET_PAGE_SIZE, paramData);
+    pageSize = dbPageSize;
+    auto status = StoreUtil::ConvertStatus(dbStatus);
+    if (status != SUCCESS) {
+        ReportDBFaultEvent(status, std::string(__FUNCTION__));
+        ZLOGE("status:0x%{public}x pageSize:%{public}d", status, pageSize);
+    }
+    return status;
+}
+
 Status SingleStoreImpl::RemoveDeviceData(const std::string &device)
 {
     DdsTrace trace(std::string(LOG_TAG "::") + std::string(__FUNCTION__));

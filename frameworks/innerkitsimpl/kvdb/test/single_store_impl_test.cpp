@@ -2697,4 +2697,114 @@ HWTEST_F(SingleStoreImplTest, RekeyWithGetEntriesVerify, TestSize.Level0)
     }
 }
 
+/**
+  * @tc.name: GetPageSize001
+  * @tc.desc: Get page size of a SINGLE_VERSION kv store (SQLite engine), should return NOT_SUPPORT
+  * @tc.type: FUNC
+  * @tc.require:
+  */
+HWTEST_F(SingleStoreImplTest, GetPageSize001, TestSize.Level1)
+{
+    ASSERT_NE(kvStore_, nullptr);
+ 
+    /**
+     * @tc.steps: step1. Call GetPageSize on the SINGLE_VERSION kv store (SQLite engine).
+     * @tc.expected: step1. Returns NOT_SUPPORT because SQLite engine does not support GET_PAGE_SIZE.
+     */
+    int pageSize = 0;
+    Status status = kvStore_->GetPageSize(pageSize);
+    EXPECT_EQ(status, NOT_SUPPORT);
+}
+ 
+/**
+  * @tc.name: GetPageSize002
+  * @tc.desc: After Put data, GetPageSize on SINGLE_VERSION (SQLite) should still return NOT_SUPPORT
+  * @tc.type: FUNC
+  * @tc.require:
+  */
+HWTEST_F(SingleStoreImplTest, GetPageSize002, TestSize.Level1)
+{
+    ASSERT_NE(kvStore_, nullptr);
+ 
+    /**
+     * @tc.steps: step1. Put some data into the store.
+     */
+    Status status = kvStore_->Put({"page_size_key"}, {"page_size_value"});
+    ASSERT_EQ(status, SUCCESS);
+ 
+    /**
+     * @tc.steps: step2. Read page size after writing.
+     * @tc.expected: step2. Returns NOT_SUPPORT because SQLite engine does not support GET_PAGE_SIZE.
+     */
+    int pageSize = 0;
+    status = kvStore_->GetPageSize(pageSize);
+    EXPECT_EQ(status, NOT_SUPPORT);
+}
+ 
+/**
+  * @tc.name: GetPageSize003
+  * @tc.desc: Get page size on a closed store should return ALREADY_CLOSED
+  * @tc.type: FUNC
+  * @tc.require:
+  */
+HWTEST_F(SingleStoreImplTest, GetPageSize003, TestSize.Level1)
+{
+    std::shared_ptr<SingleKvStore> kvStore;
+    kvStore = CreateKVStore("ClosedPageSizeStore", KvStoreType::SINGLE_VERSION, false, true);
+    ASSERT_NE(kvStore, nullptr);
+    /**
+     * @tc.steps: step1. Close the store first.
+     */
+    AppId appId = { "SingleStoreImplTest" };
+    StoreId storeId = { "ClosedPageSizeStore" };
+    Status status = StoreManager::GetInstance().CloseKVStore(appId, storeId);
+    ASSERT_EQ(status, SUCCESS);
+    /**
+     * @tc.steps: step2. Call GetPageSize on the closed store.
+     * @tc.expected: step2. Returns ALREADY_CLOSED.
+     */
+    int pageSize = 0;
+    status = kvStore->GetPageSize(pageSize);
+    EXPECT_EQ(status, ALREADY_CLOSED);
+    auto baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
+    status = StoreManager::GetInstance().Delete(appId, storeId, baseDir);
+    ASSERT_EQ(status, SUCCESS);
+}
+ 
+/**
+  * @tc.name: GetPageSize004
+  * @tc.desc: Get page size of a LOCAL_ONLY kv store (GaussDB RD engine), should return SUCCESS and a positive page size
+  * @tc.type: FUNC
+  * @tc.require:
+  */
+HWTEST_F(SingleStoreImplTest, GetPageSize004, TestSize.Level1)
+{
+    auto kvStore = CreateKVStore("LocalOnlyPageSizeStore", KvStoreType::LOCAL_ONLY, false, true);
+    ASSERT_NE(kvStore, nullptr);
+    /**
+     * @tc.steps: step1. Call GetPageSize on the LOCAL_ONLY kv store (GaussDB RD engine).
+     * @tc.expected: step1. Returns SUCCESS and pageSize is a positive integer.
+     */
+    int pageSize = 0;
+    Status status = kvStore->GetPageSize(pageSize);
+    EXPECT_EQ(status, SUCCESS);
+    EXPECT_GT(pageSize, 0);
+    EXPECT_TRUE(pageSize == 4 || pageSize == 8 || pageSize == 16 || pageSize == 32 ||
+        pageSize == 64) << "pageSize=" << pageSize;
+    /**
+     * @tc.steps: step2. Call GetPageSize again, the result should be stable.
+     * @tc.expected: step2. Returns SUCCESS and the same pageSize value.
+     */
+    int pageSizeAgain = 0;
+    status = kvStore->GetPageSize(pageSizeAgain);
+    EXPECT_EQ(status, SUCCESS);
+    EXPECT_EQ(pageSize, pageSizeAgain);
+    AppId appId = { "SingleStoreImplTest" };
+    StoreId storeId = { "LocalOnlyPageSizeStore" };
+    status = StoreManager::GetInstance().CloseKVStore(appId, storeId);
+    ASSERT_EQ(status, SUCCESS);
+    auto baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
+    status = StoreManager::GetInstance().Delete(appId, storeId, baseDir);
+    ASSERT_EQ(status, SUCCESS);
+}
 } // namespace OHOS::Test

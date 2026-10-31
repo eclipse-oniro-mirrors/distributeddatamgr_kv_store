@@ -142,6 +142,17 @@ public:
     virtual Status GetSecurityLevel(SecurityLevel &secLevel) const = 0;
 
     /**
+     * @brief Get the kvstore page size.
+     *
+     * @param pageSize The page size will be returned.
+     * @return Return SUCCESS for success, others for failure.
+    */
+    virtual Status GetPageSize(int &pageSize) const
+    {
+        return Status::NOT_SUPPORT;
+    }
+
+    /**
      * @brief Sync store with other devices.
      *
      * This is an asynchronous method.
