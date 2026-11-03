@@ -2059,7 +2059,6 @@ void Clean(bool isOpenSslClean)
     LOGI("[Clean] ssl:%d", isOpenSslClean);
     if (isOpenSslClean) {
 #ifdef USE_HITLS
-        CRYPT_EAL_Cleanup(CRYPT_EAL_INIT_ALL);
 #else
         OPENSSL_cleanup();
 #endif

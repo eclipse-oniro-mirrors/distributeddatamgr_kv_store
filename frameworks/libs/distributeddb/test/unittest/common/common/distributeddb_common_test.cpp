@@ -22,6 +22,8 @@
 
 #include "db_errno.h"
 #include "db_common.h"
+#include "db_constant.h"
+#include "value_hash_calc.h"
 #include "data_compression.h"
 #include "distributeddb_data_generate_unit_test.h"
 #include "kvdb_manager.h"
