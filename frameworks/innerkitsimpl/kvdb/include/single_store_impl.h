@@ -73,6 +73,7 @@ public:
     Status CloseResultSet(std::shared_ptr<ResultSet> &resultSet) override;
     Status GetCount(const DataQuery &query, int &count) const override;
     Status GetSecurityLevel(SecurityLevel &secLevel) const override;
+    Status GetPageSize(int &pageSize) const override;
     Status RemoveDeviceData(const std::string &device) override;
     Status Backup(const std::string &file, const std::string &baseDir) override;
     Status Restore(const std::string &file, const std::string &baseDir) override;
