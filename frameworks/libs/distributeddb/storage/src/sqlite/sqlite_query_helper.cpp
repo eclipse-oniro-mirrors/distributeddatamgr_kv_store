@@ -1209,19 +1209,20 @@ void SqliteQueryHelper::AppendCloudQuery(bool isCloudForcePush, bool isCompensat
     std::string archivedBit = DBCommon::FlagToStr(LogInfoFlag::FLAG_ARCHIVED);
     sql += CloudStorageUtils::GetLeftJoinLogSql(tableName_, false);
     sql += " WHERE ";
+    if (mode == CloudWaterType::DELETE && isCompensatedTask) {
+        // deleted data does not have primary key, requires gid to compensate sync
+        sql += "(b.status = 1 AND (b.flag & " + deleteBit + " = " + deleteBit + ") AND b.cloud_gid != '') OR ";
+    }
+    sql += "(";
     // let data after remove device data at flag_only and logic delete mode and deleted by others to upload to cloud.
     if (mode == CloudWaterType::INSERT) {
         sql += "(b.cloud_gid == '' and (b.flag & " + inconsistencyBit + " != 0) and (b.flag & " + localBit +
             " = 0) and (b.flag & " + logicDeleteBit + " != " + logicDeleteBit + ") and";
         sql += " (b.flag & " + deleteBit + " = 0) and (b.status = 0)) OR ";
     }
-    if (mode == CloudWaterType::DELETE && isCompensatedTask) {
-        // deleted data does not have primary key, requires gid to compensate sync
-        sql += "(b.status = 1 AND (b.flag & " + deleteBit + " = " + deleteBit + ") AND b.cloud_gid != '') OR ";
-    }
     if (mode == CloudWaterType::DELETE || mode == CloudWaterType::UPDATE) {
         if (queryObjNodes_.empty() && isCompensatedTask) {
-            sql += "0 ";
+            sql += "0 )";
             return;
         }
         if (!isCompensatedTask) {
@@ -1240,7 +1241,7 @@ void SqliteQueryHelper::AppendCloudQuery(bool isCloudForcePush, bool isCompensat
     }
     sql += " AND (b.flag & " + logicDeleteBit + " != " + logicDeleteBit +
         ") AND (b.cloud_gid != '' or"; // actually, b.cloud_gid will not be null.
-    sql += " (b.cloud_gid == '' and (b.flag & " + deleteBit + " = 0))) ";
+    sql += " (b.cloud_gid == '' and (b.flag & " + deleteBit + " = 0)))) ";
 }
 
 void SqliteQueryHelper::AppendCloudQueryToGetDiffData(std::string &sql, const CloudWaterType mode, bool isKv)

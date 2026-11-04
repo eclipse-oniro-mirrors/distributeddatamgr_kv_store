@@ -1155,5 +1155,52 @@ HWTEST_F(DistributedDBRDBComplexCloudTest, DeleteSync001, TestSize.Level3)
     EXPECT_NO_FATAL_FAILURE(CloudBlockSync(info1_, option, OK, OK));
     EXPECT_EQ(GetCloudDataCount(CLOUD_SYNC_TABLE_A), 0);
 }
+
+/**
+ * @tc.name: DeleteSync002
+ * @tc.desc: Test delete sync with query.
+ * @tc.expected: Local data delete cloud.
+ * @tc.type: FUNC
+ * @tc.author: zqq
+ */
+HWTEST_F(DistributedDBRDBComplexCloudTest, DeleteSync002, TestSize.Level3)
+{
+    /**
+     * @tc.steps:step1. Set logic delete
+     * @tc.expected: step1. Set successfully.
+     */
+    auto delegate = GetDelegate(info1_);
+    ASSERT_NE(delegate, nullptr);
+    bool isLogicDelete = true;
+    PragmaData pragmaData = &isLogicDelete;
+    ASSERT_EQ(delegate->Pragma(PragmaCmd::LOGIC_DELETE_SYNC_DATA, pragmaData), OK);
+    /**
+     * @tc.steps:step2. Prepare cloud data
+     * @tc.expected: step2. cloud data sync to local successfully.
+     */
+    int count = 1;
+    InsertCloudData(1, count, CLOUD_SYNC_TABLE_A);
+    CloudSyncOption option;
+    option.devices = { "CLOUD" };
+    option.mode = SyncMode::SYNC_MODE_CLOUD_MERGE;
+    option.query = Query::Select().From(CLOUD_SYNC_TABLE_A).EqualTo("id", static_cast<int64_t>(1));
+    option.queryMode = QueryMode::UPLOAD_ONLY;
+    option.waitTime = DBConstant::MAX_TIMEOUT;
+    option.priorityTask = true;
+    EXPECT_NO_FATAL_FAILURE(CloudBlockSync(info1_, option, OK, OK));
+    EXPECT_EQ(GetCloudDataCount(CLOUD_SYNC_TABLE_A), 1);
+    EXPECT_EQ(GetLocalDataCount(info1_, CLOUD_SYNC_TABLE_A), 1);
+    /**
+     * @tc.steps:step3. RemoveDeviceData and sync with another query
+     * @tc.expected: step3. Cloud not exit data.
+     */
+    EXPECT_EQ(delegate->RemoveDeviceData("cloud", ClearMode::FLAG_ONLY), OK);
+    ASSERT_EQ(GetLocalDataCount(info1_, CLOUD_SYNC_TABLE_A), 1);
+    DeleteCloudData(1, count, CLOUD_SYNC_TABLE_A);
+    ASSERT_EQ(GetCloudDataCount(CLOUD_SYNC_TABLE_A), 0);
+    option.query = Query::Select().From(CLOUD_SYNC_TABLE_A).EqualTo("id", static_cast<int64_t>(2));
+    EXPECT_NO_FATAL_FAILURE(CloudBlockSync(info1_, option, OK, OK));
+    EXPECT_EQ(GetCloudDataCount(CLOUD_SYNC_TABLE_A), 0);
+}
 }
 #endif

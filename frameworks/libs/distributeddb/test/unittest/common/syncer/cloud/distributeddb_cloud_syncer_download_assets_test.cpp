@@ -676,7 +676,7 @@ void DistributedDBCloudSyncerDownloadAssetsTest::DataStatusTest004()
         if (count == 2) { // 2 is compensated sync
             std::string sql = "select count(*) from " + DBCommon::GetLogTableName(ASSETS_TABLE_NAME) + " WHERE "
                 " (status = 3 and data_key in (2,3,12,13)) or (status = 0)";
-            CloudDBSyncUtilsTest::CheckCount(db, sql, 19); // 19 is match count
+            CloudDBSyncUtilsTest::CheckCount(db, sql, 19); // 19 is match count, contains local delete 1 cloud data
             g_processCondition.notify_one();
         }
     });
