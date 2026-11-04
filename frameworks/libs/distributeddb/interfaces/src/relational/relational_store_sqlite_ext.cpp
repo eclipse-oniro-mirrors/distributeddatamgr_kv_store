@@ -910,6 +910,10 @@ void BinlogDataChangedObserver(const char *dbPath, char *tableName)
     MatrixFileInfo fileInfo;
     errCode = DataDonationUtils::FindMatrixFileInfo(hashFileName, fileInfo);
     if (errCode != E_OK) {
+        if (tableName == nullptr) {
+            LOGW("[BinlogDataChangedObserver] matrix info not found for full table notify");
+            return;
+        }
         ChangeProperties properties = {
             .isTrackedDataChange = true,
             .isP2pSyncDataChange = false,
@@ -926,7 +930,16 @@ void BinlogDataChangedObserver(const char *dbPath, char *tableName)
         return;
     }
 
-    std::vector<std::string> changedData = {std::string(tableName)};
+    // tableName null means all tables changed, update all registered tables in matrix file
+    std::vector<std::string> changedData;
+    if (tableName == nullptr) {
+        changedData.reserve(fileInfo.matrixTables.size());
+        for (const auto &entry : fileInfo.matrixTables) {
+            changedData.push_back(entry.first);
+        }
+    } else {
+        changedData = {std::string(tableName)};
+    }
     MatrixFileUpdateConfig config = {.isFullSync = false};
     errCode = DataDonationUtils::UpdateMatrixFile(fileInfo, changedData, config);
     if (errCode != DistributedDB::E_OK) {
