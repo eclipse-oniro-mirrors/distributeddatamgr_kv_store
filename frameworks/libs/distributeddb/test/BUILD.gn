@@ -365,6 +365,10 @@ distributeddb_unittest("DistributedDBCommonTest") {
   sources = [ "unittest/common/common/distributeddb_common_test.cpp" ]
 }
 
+distributeddb_unittest("DistributedDBValueHashCalcTest") {
+  sources = [ "unittest/common/common/distributeddb_value_hash_calc_test.cpp" ]
+}
+
 distributeddb_unittest("DistributedDBInterfacesNBDelegateLocalBatchTest") {
   sources = [ "unittest/common/interfaces/distributeddb_interfaces_nb_delegate_local_batch_test.cpp" ]
 }
@@ -1279,6 +1283,7 @@ group("unittest") {
     ":DistributedDBSyncerDeviceManagerTest",
     ":DistributedDBThreadPoolTest",
     ":DistributedDBTimeSyncTest",
+    ":DistributedDBValueHashCalcTest",
     ":RuntimeContextProcessSystemApiAdapterImplTest",
     ":tokenizer_test",
   ]

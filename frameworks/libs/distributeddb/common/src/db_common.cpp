@@ -31,6 +31,7 @@
 #ifdef USE_HITLS
 #include "crypt_eal_rand.h"
 #include "crypt_errno.h"
+#include "crypt_eal_init.h"
 #else
 #include <openssl/rand.h>
 #endif
@@ -837,7 +838,7 @@ int DBCommon::GetRandomBytes(uint8_t *out, uint32_t len)
         return -E_INVALID_ARGS;
     }
 #ifdef USE_HITLS
-    int32_t ret = CRYPT_EAL_RandInit(CRYPT_RAND_SHA256, NULL, NULL, NULL, 0);
+    int32_t ret = CRYPT_EAL_Init(CRYPT_EAL_INIT_ALL);
     if (ret != CRYPT_SUCCESS && ret != CRYPT_EAL_ERR_DRBG_REPEAT_INIT) {
         LOGE("[DBCommon] Init random bytes failed.");
         return -E_SYSTEM_API_FAIL;
