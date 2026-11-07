@@ -1343,6 +1343,58 @@ HWTEST_F(DataDonationSqlGeneratorTest, BinlogDataChangeObserverTest001, TestSize
 }
 
 /**
+ * @tc.name: BinlogDataChangeNotifyTest001
+ * @tc.desc: Test full table and single table notify by sqlite3_notify_data_change_binlog
+ * @tc.type: FUNC
+ * @tc.require:
+ * @tc.author: test
+ */
+HWTEST_F(DataDonationSqlGeneratorTest, BinlogDataChangeNotifyTest001, TestSize.Level0)
+{
+    /**
+     * @tc.steps:step1. Set schema and observer by enable binlog.
+     * @tc.expected: step1. OK.
+     */
+    StoreInfo storeInfo = {USER_ID, APP_ID, STORE_ID_1};
+    SetSchemaInfo(storeInfo, GetJsonFileSchema());
+    ASSERT_EQ(BasicUnitTest::InitDelegate(storeInfo, "device1"), E_OK);
+
+    auto delegate = GetDelegate(storeInfo);
+    ASSERT_NE(delegate, nullptr);
+    EXPECT_EQ(delegate->SetBinlogEnabled(true), OK);
+    SetBinlogSchemaAndChangeCallback(db);
+
+    /**
+     * @tc.steps:step2. Set matrix file info.
+     * @tc.expected: step2. OK.
+     */
+    std::string filePath = InitMatrixFile();
+    ASSERT_TRUE(!filePath.empty());
+    MatrixFileInfo info = {
+        .matrixFilePath = filePath,
+        .matrixTables = {{"TableA", 0}, {"TableB", 1}},
+        .fullSyncOffset = 2
+    };
+    ASSERT_EQ(delegate->SetTrackerMatrixInfo(info), OK);
+
+    /**
+     * @tc.steps:step3. Notify all tables and single table change.
+     * @tc.expected: step3. OK.
+     */
+    EXPECT_EQ(sqlite3_notify_data_change_binlog(db, nullptr), SQLITE_OK);
+    EXPECT_EQ(sqlite3_notify_data_change_binlog(db, "TableA"), SQLITE_OK);
+
+    /**
+     * @tc.steps:step4. Notify all tables change after matrix info is unset.
+     * @tc.expected: step4. OK.
+     */
+    EXPECT_EQ(DataDonationUtils::UnsetTrackerMatrixInfo(db), OK);
+    EXPECT_EQ(sqlite3_notify_data_change_binlog(db, nullptr), SQLITE_OK);
+
+    unlink(filePath.c_str());
+}
+
+/**
  * @tc.name: QueryBinlogSubscribeData006
  * @tc.desc: Test QuerySubscribeOutput interface with not enabled binlog.
  * @tc.type: FUNC
