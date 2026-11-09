@@ -53,19 +53,14 @@ public:
         std::optional<DistributedTableMode> tableMode;
     };
 
-    struct CreateDistributedTableConfig {
-        bool isAsync = false;
-    };
-
     DB_API virtual DBStatus SetStoreConfig(const StoreConfig &config)
     {
         return OK;
     }
 
-    DB_API DBStatus CreateDistributedTable(const std::string &tableName, TableSyncType type = DEVICE_COOPERATION,
-        CreateDistributedTableConfig config = {false})
+    DB_API DBStatus CreateDistributedTable(const std::string &tableName, TableSyncType type = DEVICE_COOPERATION)
     {
-        return CreateDistributedTableInner(tableName, type, config);
+        return CreateDistributedTableInner(tableName, type);
     }
 
     DB_API virtual DBStatus Sync(const std::vector<std::string> &devices, SyncMode mode,
@@ -256,8 +251,7 @@ public:
     }
 protected:
     virtual DBStatus RemoveDeviceDataInner(const std::string &device, ClearMode mode) = 0;
-    virtual DBStatus CreateDistributedTableInner(const std::string &tableName, TableSyncType type,
-        const CreateDistributedTableConfig &config) = 0;
+    virtual DBStatus CreateDistributedTableInner(const std::string &tableName, TableSyncType type) = 0;
     virtual DBStatus RemoveDeviceTableDataInner(const ClearDeviceDataOption &option)
     {
         return DBStatus::OK;

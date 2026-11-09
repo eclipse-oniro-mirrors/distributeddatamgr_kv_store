@@ -97,8 +97,7 @@ DBStatus RelationalStoreDelegateImpl::RemoveDeviceTableDataInner(const ClearDevi
     return NOT_SUPPORT;
 }
 
-DBStatus RelationalStoreDelegateImpl::CreateDistributedTableInner(const std::string &tableName, TableSyncType type,
-    const CreateDistributedTableConfig &config)
+DBStatus RelationalStoreDelegateImpl::CreateDistributedTableInner(const std::string &tableName, TableSyncType type)
 {
     LOGI("[RDBDelegate] Create distributed table for [%s length[%u]], type[%d]",
         DBCommon::StringMiddleMasking(tableName).c_str(), tableName.length(), static_cast<int>(type));
@@ -113,11 +112,6 @@ DBStatus RelationalStoreDelegateImpl::CreateDistributedTableInner(const std::str
     if (!(type == DEVICE_COOPERATION || type == CLOUD_COOPERATION)) {
         LOGE("[RDBDelegate] Invalid table sync type.");
         return INVALID_ARGS;
-    }
-
-    if (type != CLOUD_COOPERATION && config.isAsync) {
-        LOGE("[RelationalStore Delegate] Only supports create cloud distributed table asynchronously");
-        return NOT_SUPPORT;
     }
 
     if (type == DEVICE_COOPERATION) {
@@ -137,7 +131,7 @@ DBStatus RelationalStoreDelegateImpl::CreateDistributedTableInner(const std::str
         return DB_ERROR;
     }
 
-    int errCode = conn_->CreateDistributedTable(tableName, type, config.isAsync);
+    int errCode = conn_->CreateDistributedTable(tableName, type, false);
     if (errCode != E_OK) {
         LOGE("[RDBDelegate] Create Distributed table failed:%d", errCode);
         return TransferDBErrno(errCode);
