@@ -807,6 +807,7 @@ Status SingleStoreImpl::Backup(const std::string &file, const std::string &baseD
 Status SingleStoreImpl::Restore(const std::string &file, const std::string &baseDir)
 {
     DdsTrace trace(std::string(LOG_TAG "::") + std::string(__FUNCTION__));
+    StoreManager::GetInstance().WaitAfterCreate({ appId_ }, { storeId_ });
     auto service = KVDBServiceClient::GetInstance();
     if (service != nullptr) {
         service->Close({ appId_ }, { storeId_ }, subUser_);

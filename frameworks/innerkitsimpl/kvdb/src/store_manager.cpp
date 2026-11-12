@@ -15,14 +15,13 @@
 #define LOG_TAG "StoreManager"
 #include "store_manager.h"
 
-#include <algorithm>
-
 #include "backup_manager.h"
 #include "dev_manager.h"
 #include "kvdb_service_client.h"
 #include "kvstore_service_death_notifier.h"
 #include "log_print.h"
 #include "runtime_config.h"
+#include "securec.h"
 #include "security_manager.h"
 
 #include "store_util.h"
@@ -32,7 +31,6 @@ namespace {
 constexpr int32_t AFTER_CREATE_MAX_RETRY = 3;
 constexpr int32_t AFTER_CREATE_RETRY_DELAY_MS = 100;
 constexpr uint32_t AFTER_CREATE_WAIT_INTERVAL = 2000;
-}
 
 bool IsRetryableStatus(Status status)
 {
@@ -41,7 +39,10 @@ bool IsRetryableStatus(Status status)
 
 void ClearPassword(std::vector<uint8_t> &password)
 {
-    std::fill(password.begin(), password.end(), 0);
+    if (!password.empty()) {
+        memset_s(password.data(), password.size(), 0, password.size());
+    }
+}
 }
 StoreManager &StoreManager::GetInstance()
 {
@@ -335,9 +336,11 @@ void StoreManager::ScheduleAfterCreate(const AppId &appId, const StoreId &storeI
         StoreManager::GetInstance().AfterCreateAsync(appId, storeId, options, std::move(pwd), 0, pending);
     });
     if (taskId != TaskExecutor::INVALID_TASK_ID) {
+        ClearPassword(pwd);
         return;
     }
     Status afterStatus = service->AfterCreate(appId, storeId, options, pwd);
+    ClearPassword(pwd);
     if (afterStatus == SUCCESS) {
         pending->set_value();
         pendingAfterCreates_.Erase(PendingKey(appId, storeId));
@@ -376,12 +379,12 @@ void StoreManager::AfterCreateAsync(const AppId &appId, const StoreId &storeId, 
     KVDBFaultHiViewReporter::ReportKVFaultEvent(reportInfo);
     if (IsRetryableStatus(status) && retryCount < AFTER_CREATE_MAX_RETRY) {
         auto taskId = TaskExecutor::GetInstance().Schedule(std::chrono::milliseconds(AFTER_CREATE_RETRY_DELAY_MS),
-            [appId, storeId, options, password = std::move(password), retryCount, pending]() mutable {
+            [appId, storeId, options, password, retryCount, pending]() mutable {
                 StoreManager::GetInstance().AfterCreateAsync(appId, storeId, options, std::move(password),
                     retryCount + 1, pending);
             });
+        ClearPassword(password);
         if (taskId == TaskExecutor::INVALID_TASK_ID) {
-            ClearPassword(password);
             if (pending != nullptr) {
                 pending->set_value();
             }
