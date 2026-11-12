@@ -796,7 +796,7 @@ HWTEST_F(DistributedDBStorageSQLiteSingleVerNaturalExecutorTest, PragmaTest001, 
     EXPECT_EQ(g_connection->Pragma(PRAGMA_GET_DEVICE_IDENTIFIER_OF_ENTRY, nullptr), -E_INVALID_ARGS);
     EXPECT_EQ(g_connection->Pragma(PRAGMA_SET_MAX_LOG_LIMIT, nullptr), -E_INVALID_ARGS);
     EXPECT_EQ(g_connection->Pragma(REMOVE_LOCAL_DATA_BY_KEY_PATTERN, nullptr), -E_INVALID_ARGS);
-    uint64_t val = 0x400000ULL;
+    uint64_t val = DBConstant::MAX_LOG_SIZE_LOW; // the lower limit boundary of the max log size
     PragmaData logLimit = static_cast<PragmaData>(&val);
     EXPECT_EQ(g_connection->Pragma(PRAGMA_SET_MAX_LOG_LIMIT, logLimit), OK);
     EXPECT_EQ(g_connection->Pragma(PRAGMA_GET_IDENTIFIER_OF_DEVICE, nullptr), -E_INVALID_ARGS);

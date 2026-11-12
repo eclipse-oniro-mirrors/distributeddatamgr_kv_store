@@ -149,8 +149,8 @@ public:
     static constexpr const int MAX_DISTRIBUTED_TABLE_COUNT = 32;
 
     static constexpr const uint64_t MAX_LOG_SIZE_HIGH = 0x400000000ULL; // 16GB
-    static constexpr const uint64_t MAX_LOG_SIZE_LOW = 0x400000ULL; // 4MB
-    static constexpr const uint64_t MAX_LOG_SIZE_DEFAULT = 0x40000000ULL; // 1GB
+    static constexpr const uint64_t MAX_LOG_SIZE_LOW = 0x4000ULL; // 16KB
+    static constexpr const uint64_t MAX_LOG_SIZE_DEFAULT =  0x40000000ULL; // 1GB
 
     static constexpr const int DEF_LIFE_CYCLE_TIME = 60000; // 60S
 
