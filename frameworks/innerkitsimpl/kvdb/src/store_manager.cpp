@@ -15,6 +15,8 @@
 #define LOG_TAG "StoreManager"
 #include "store_manager.h"
 
+#include <algorithm>
+
 #include "backup_manager.h"
 #include "dev_manager.h"
 #include "kvdb_service_client.h"
@@ -24,7 +26,23 @@
 #include "security_manager.h"
 
 #include "store_util.h"
+#include "task_executor.h"
 namespace OHOS::DistributedKv {
+namespace {
+constexpr int32_t AFTER_CREATE_MAX_RETRY = 3;
+constexpr int32_t AFTER_CREATE_RETRY_DELAY_MS = 100;
+constexpr uint32_t AFTER_CREATE_WAIT_INTERVAL = 2000;
+}
+
+bool IsRetryableStatus(Status status)
+{
+    return status == IPC_ERROR || status == SERVER_UNAVAILABLE || status == IPC_PARCEL_ERROR;
+}
+
+void ClearPassword(std::vector<uint8_t> &password)
+{
+    std::fill(password.begin(), password.end(), 0);
+}
 StoreManager &StoreManager::GetInstance()
 {
     static StoreManager instance;
@@ -53,6 +71,7 @@ std::shared_ptr<SingleKvStore> StoreManager::GetKVStore(const AppId &appId, cons
         status = INVALID_ARGUMENT;
         return nullptr;
     }
+    WaitAfterCreate(appId, storeId);
     auto service = KVDBServiceClient::GetInstance();
     if (service != nullptr) {
         status = service->BeforeCreate(appId, storeId, options);
@@ -80,16 +99,7 @@ std::shared_ptr<SingleKvStore> StoreManager::GetKVStore(const AppId &appId, cons
         ZLOGI("Rebuild store success, storeId:%{public}s", StoreUtil::Anonymous(storeId.storeId).c_str());
         KVDBFaultHiViewReporter::ReportKVRebuildEvent(reportInfo);
     }
-    if (storeParams.isCreate && options.persistent) {
-        std::vector<uint8_t> pwd(storeParams.password.GetData(), storeParams.password.GetData() +
-            storeParams.password.GetSize());
-        if (service != nullptr) {
-            // delay notify
-            service->AfterCreate(appId, storeId, options, pwd);
-        }
-        pwd.assign(pwd.size(), 0);
-        storeParams.password.Clear();
-    }
+    SubmitAfterCreate(appId, storeId, options, service, storeParams);
     return kvStore;
 }
 
@@ -160,7 +170,7 @@ Status StoreManager::GetStoreIds(const AppId &appId, std::vector<StoreId> &store
     if (!appId.IsValid()) {
         return INVALID_ARGUMENT;
     }
-
+    WaitAllAfterCreate(appId);
     auto service = KVDBServiceClient::GetInstance();
     if (service == nullptr) {
         return SERVER_UNAVAILABLE;
@@ -175,6 +185,7 @@ Status StoreManager::Delete(const AppId &appId, const StoreId &storeId, const st
     if (!appId.IsValid() || !storeId.IsValid()) {
         return INVALID_ARGUMENT;
     }
+    WaitAfterCreate(appId, storeId);
     auto service = KVDBServiceClient::GetInstance();
     if (service != nullptr) {
         service->Delete(appId, storeId, subUser);
@@ -197,6 +208,7 @@ Status StoreManager::Delete(const AppId &appId, const StoreId &storeId, const Op
     if (!appId.IsValid() || !storeId.IsValid()) {
         return INVALID_ARGUMENT;
     }
+    WaitAfterCreate(appId, storeId);
     auto service = KVDBServiceClient::GetInstance();
     if (service != nullptr) {
         service->Delete(appId, storeId, options);
@@ -296,5 +308,139 @@ Status StoreManager::UnsubscribeSwitchData(const AppId &appId, std::shared_ptr<K
         return true;
     });
     return SUCCESS;
+}
+
+void StoreManager::SubmitAfterCreate(const AppId &appId, const StoreId &storeId, const Options &options,
+    const std::shared_ptr<KVDBServiceClient> &service, StoreParams &storeParams)
+{
+    if (!storeParams.isCreate || !options.persistent) {
+        return;
+    }
+    std::vector<uint8_t> pwd(storeParams.password.GetData(), storeParams.password.GetData() +
+        storeParams.password.GetSize());
+    if (service != nullptr) {
+        ScheduleAfterCreate(appId, storeId, options, service, pwd);
+    }
+    ClearPassword(pwd);
+    storeParams.password.Clear();
+}
+
+void StoreManager::ScheduleAfterCreate(const AppId &appId, const StoreId &storeId, const Options &options,
+    const std::shared_ptr<KVDBServiceClient> &service, std::vector<uint8_t> pwd)
+{
+    auto pending = std::make_shared<std::promise<void>>();
+    pendingAfterCreates_.InsertOrAssign(PendingKey(appId, storeId), pending->get_future().share());
+    auto taskId = TaskExecutor::GetInstance().Execute(
+        [appId, storeId, options, pwd, pending]() mutable {
+        StoreManager::GetInstance().AfterCreateAsync(appId, storeId, options, std::move(pwd), 0, pending);
+    });
+    if (taskId != TaskExecutor::INVALID_TASK_ID) {
+        return;
+    }
+    Status afterStatus = service->AfterCreate(appId, storeId, options, pwd);
+    if (afterStatus == SUCCESS) {
+        pending->set_value();
+        pendingAfterCreates_.Erase(PendingKey(appId, storeId));
+        return;
+    }
+    ReportInfo reportInfo = { .options = options, .errorCode = afterStatus, .systemErrorNo = errno,
+        .appId = appId.appId, .storeId = storeId.storeId, .functionName = "AfterCreate" };
+    KVDBFaultHiViewReporter::ReportKVFaultEvent(reportInfo);
+    pending->set_value();
+    pendingAfterCreates_.Erase(PendingKey(appId, storeId));
+}
+
+void StoreManager::AfterCreateAsync(const AppId &appId, const StoreId &storeId, const Options &options,
+    std::vector<uint8_t> password, int32_t retryCount, std::shared_ptr<std::promise<void>> pending)
+{
+    auto service = KVDBServiceClient::GetInstance();
+    if (service == nullptr) {
+        ClearPassword(password);
+        if (pending != nullptr) {
+            pending->set_value();
+        }
+        pendingAfterCreates_.Erase(PendingKey(appId, storeId));
+        return;
+    }
+    Status status = service->AfterCreate(appId, storeId, options, password);
+    if (status == SUCCESS) {
+        ClearPassword(password);
+        if (pending != nullptr) {
+            pending->set_value();
+        }
+        pendingAfterCreates_.Erase(PendingKey(appId, storeId));
+        return;
+    }
+    ReportInfo reportInfo = { .options = options, .errorCode = status, .systemErrorNo = errno,
+        .appId = appId.appId, .storeId = storeId.storeId, .functionName = "AfterCreate" };
+    KVDBFaultHiViewReporter::ReportKVFaultEvent(reportInfo);
+    if (IsRetryableStatus(status) && retryCount < AFTER_CREATE_MAX_RETRY) {
+        auto taskId = TaskExecutor::GetInstance().Schedule(std::chrono::milliseconds(AFTER_CREATE_RETRY_DELAY_MS),
+            [appId, storeId, options, password = std::move(password), retryCount, pending]() mutable {
+                StoreManager::GetInstance().AfterCreateAsync(appId, storeId, options, std::move(password),
+                    retryCount + 1, pending);
+            });
+        if (taskId == TaskExecutor::INVALID_TASK_ID) {
+            ClearPassword(password);
+            if (pending != nullptr) {
+                pending->set_value();
+            }
+            pendingAfterCreates_.Erase(PendingKey(appId, storeId));
+        }
+    } else {
+        ClearPassword(password);
+        if (pending != nullptr) {
+            pending->set_value();
+        }
+        pendingAfterCreates_.Erase(PendingKey(appId, storeId));
+    }
+}
+
+std::string StoreManager::PendingKey(const AppId &appId, const StoreId &storeId)
+{
+    return appId.appId + "/" + storeId.storeId;
+}
+
+void StoreManager::WaitAfterCreate(const AppId &appId, const StoreId &storeId)
+{
+    std::shared_future<void> future;
+    bool hasPending = false;
+    pendingAfterCreates_.ComputeIfPresent(PendingKey(appId, storeId),
+        [&future, &hasPending](const auto &, auto &value) {
+        future = value;
+        hasPending = true;
+        return true;
+    });
+    if (!hasPending) {
+        return;
+    }
+    if (future.wait_for(std::chrono::milliseconds(AFTER_CREATE_WAIT_INTERVAL)) != std::future_status::ready) {
+        ZLOGW("appId:%{public}s, storeId:%{public}s wait after create timeout:%{public}ums",
+            appId.appId.c_str(), StoreUtil::Anonymous(storeId.storeId).c_str(), AFTER_CREATE_WAIT_INTERVAL);
+        ReportInfo reportInfo = { .options = {}, .errorCode = TIME_OUT, .systemErrorNo = errno,
+            .appId = appId.appId, .storeId = storeId.storeId, .functionName = "WaitAfterCreate" };
+        KVDBFaultHiViewReporter::ReportKVFaultEvent(reportInfo);
+    }
+}
+
+void StoreManager::WaitAllAfterCreate(const AppId &appId)
+{
+    std::string prefix = appId.appId + "/";
+    std::vector<std::shared_future<void>> futures;
+    pendingAfterCreates_.ForEachCopies([&prefix, &futures](const auto &key, auto &value) {
+        if (key.compare(0, prefix.size(), prefix) == 0) {
+            futures.push_back(value);
+        }
+        return false;
+    });
+    for (auto &future : futures) {
+        if (future.wait_for(std::chrono::milliseconds(AFTER_CREATE_WAIT_INTERVAL)) != std::future_status::ready) {
+            ZLOGW("appId:%{public}s wait all after create timeout:%{public}ums", appId.appId.c_str(),
+                AFTER_CREATE_WAIT_INTERVAL);
+            ReportInfo reportInfo = { .options = {}, .errorCode = TIME_OUT, .systemErrorNo = errno,
+                .appId = appId.appId, .storeId = "", .functionName = "WaitAllAfterCreate" };
+            KVDBFaultHiViewReporter::ReportKVFaultEvent(reportInfo);
+        }
+    }
 }
 }

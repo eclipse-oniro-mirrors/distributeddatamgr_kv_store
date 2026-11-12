@@ -78,6 +78,7 @@ void SingleStoreImplMockTest::SetUpTestCase()
     BObserverBridge::observerBridge = observerBridgeMock;
     taskExecutorMock = make_shared<TaskExecutorMock>();
     BTaskExecutor::taskExecutor = taskExecutorMock;
+    ON_CALL(*taskExecutorMock, Execute(_)).WillByDefault(Return(TaskExecutor::INVALID_TASK_ID));
     convertorMock = make_shared<ConvertorMock>();
     BConvertor::convertor = convertorMock;
     storeFactory = make_shared<StoreFactory>();

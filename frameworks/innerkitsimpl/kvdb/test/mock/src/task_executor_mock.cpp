@@ -37,7 +37,10 @@ TaskExecutor::TaskId TaskExecutor::Schedule(Duration delay, const Task &task, Du
 
 TaskExecutor::TaskId TaskExecutor::Execute(const Task &task)
 {
-    return INVALID_TASK_ID;
+    if (BTaskExecutor::taskExecutor == nullptr) {
+        return INVALID_TASK_ID;
+    }
+    return BTaskExecutor::taskExecutor->Execute(task);
 }
 
 bool TaskExecutor::Remove(TaskExecutor::TaskId taskId, bool wait)

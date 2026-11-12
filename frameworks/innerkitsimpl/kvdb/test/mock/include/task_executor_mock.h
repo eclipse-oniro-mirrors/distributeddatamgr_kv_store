@@ -27,6 +27,7 @@ public:
     BTaskExecutor() = default;
     virtual ~BTaskExecutor() = default;
     virtual TaskId Schedule(Duration, const Task &, Duration, uint64_t) = 0;
+    virtual TaskId Execute(const Task &) = 0;
 
 public:
     static inline std::shared_ptr<BTaskExecutor> taskExecutor = nullptr;
@@ -35,6 +36,7 @@ public:
 class TaskExecutorMock : public BTaskExecutor {
 public:
     MOCK_METHOD(TaskId, Schedule, (Duration, const Task &, Duration, uint64_t));
+    MOCK_METHOD(TaskId, Execute, (const Task &));
 };
 } // namespace OHOS
 #endif // DISTRIBUTED_DATA_TASK_EXECUTOR_MOCK_H
