@@ -574,6 +574,7 @@ Status SingleStoreImpl::GetPageSize(int &pageSize) const
 Status SingleStoreImpl::RemoveDeviceData(const std::string &device)
 {
     DdsTrace trace(std::string(LOG_TAG "::") + std::string(__FUNCTION__));
+    StoreManager::GetInstance().WaitAfterCreate({ appId_ }, { storeId_ });
     std::shared_lock<decltype(rwMutex_)> lock(rwMutex_);
     if (dbStore_ == nullptr) {
         ZLOGE("db:%{public}s already closed!", StoreUtil::Anonymous(storeId_).c_str());
