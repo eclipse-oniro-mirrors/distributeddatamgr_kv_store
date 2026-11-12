@@ -92,6 +92,8 @@ public:
 
     bool IsAccessControlled() const override;
 
+    bool IsAccessControlled(const Property &property) const override;
+
     int SetSecurityOption(const std::string &filePath, const SecurityOption &option) const override;
 
     int GetSecurityOption(const std::string &filePath, SecurityOption &option) const override;
