@@ -25,6 +25,7 @@
 #include "kvdb_service_client.h"
 #include "log_print.h"
 #include "security_manager.h"
+#include "store_manager.h"
 #include "store_result_set.h"
 #include "store_util.h"
 #include "task_executor.h"
@@ -573,6 +574,7 @@ Status SingleStoreImpl::GetPageSize(int &pageSize) const
 Status SingleStoreImpl::RemoveDeviceData(const std::string &device)
 {
     DdsTrace trace(std::string(LOG_TAG "::") + std::string(__FUNCTION__));
+    StoreManager::GetInstance().WaitAfterCreate({ appId_ }, { storeId_ });
     std::shared_lock<decltype(rwMutex_)> lock(rwMutex_);
     if (dbStore_ == nullptr) {
         ZLOGE("db:%{public}s already closed!", StoreUtil::Anonymous(storeId_).c_str());
@@ -631,6 +633,7 @@ Status SingleStoreImpl::Sync(const std::vector<std::string> &devices, SyncMode m
 Status SingleStoreImpl::CloudSync(const AsyncDetail &async)
 {
     DdsTrace trace(std::string(LOG_TAG "::") + std::string(__FUNCTION__));
+    StoreManager::GetInstance().WaitAfterCreate({ appId_ }, { storeId_ });
     auto service = KVDBServiceClient::GetInstance();
     if (service == nullptr) {
         return SERVER_UNAVAILABLE;
@@ -804,6 +807,7 @@ Status SingleStoreImpl::Backup(const std::string &file, const std::string &baseD
 Status SingleStoreImpl::Restore(const std::string &file, const std::string &baseDir)
 {
     DdsTrace trace(std::string(LOG_TAG "::") + std::string(__FUNCTION__));
+    StoreManager::GetInstance().WaitAfterCreate({ appId_ }, { storeId_ });
     auto service = KVDBServiceClient::GetInstance();
     if (service != nullptr) {
         service->Close({ appId_ }, { storeId_ }, subUser_);
@@ -1023,6 +1027,7 @@ Status SingleStoreImpl::DoSync(SyncInfo &syncInfo, std::shared_ptr<SyncCallback>
         return DoClientSync(syncInfo, observer);
     }
 
+    StoreManager::GetInstance().WaitAfterCreate({ appId_ }, { storeId_ });
     auto service = KVDBServiceClient::GetInstance();
     if (service == nullptr) {
         return SERVER_UNAVAILABLE;

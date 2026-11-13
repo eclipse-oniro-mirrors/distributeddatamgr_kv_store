@@ -21,7 +21,10 @@
 #include "store_factory.h"
 #include "switch_observer_bridge.h"
 
+#include <future>
+
 namespace OHOS::DistributedKv {
+class KVDBServiceClient;
 class StoreManager {
 public:
     static StoreManager &GetInstance();
@@ -38,11 +41,21 @@ public:
     Status SubscribeSwitchData(const AppId &appId, std::shared_ptr<KvStoreObserver> observer);
     Status UnsubscribeSwitchData(const AppId &appId, std::shared_ptr<KvStoreObserver> observer);
     bool CleanUp();
+    void WaitAfterCreate(const AppId &appId, const StoreId &storeId);
 
 private:
     std::shared_ptr<SingleKvStore> OpenWithSecretKeyFromService(const AppId &appId, const StoreId &storeId,
         const Options &options, Status &status, StoreParams &storeParams);
+    void AfterCreateAsync(const AppId &appId, const StoreId &storeId, const Options &options,
+        std::vector<uint8_t> password, int32_t retryCount, std::shared_ptr<std::promise<void>> pending);
+    void SubmitAfterCreate(const AppId &appId, const StoreId &storeId, const Options &options,
+        const std::shared_ptr<KVDBServiceClient> &service, StoreParams &storeParams);
+    void ScheduleAfterCreate(const AppId &appId, const StoreId &storeId, const Options &options,
+        const std::shared_ptr<KVDBServiceClient> &service, std::vector<uint8_t> pwd);
+    void WaitAllAfterCreate(const AppId &appId);
+    static std::string PendingKey(const AppId &appId, const StoreId &storeId);
     ConcurrentMap<std::string, std::shared_ptr<SwitchObserverBridge>> switchObservers_;
+    ConcurrentMap<std::string, std::shared_future<void>> pendingAfterCreates_;
 };
 } // namespace OHOS::DistributedKv
 #endif // OHOS_DISTRIBUTED_DATA_FRAMEWORKS_KVDB_STORE_MANAGER_H
