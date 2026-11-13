@@ -543,6 +543,15 @@ bool RuntimeContextImpl::IsAccessControlled() const
     return systemApiAdapter_->IsAccessControlled();
 }
 
+bool RuntimeContextImpl::IsAccessControlled(const Property &property) const
+{
+    std::lock_guard<std::recursive_mutex> autoLock(systemApiAdapterLock_);
+    if (systemApiAdapter_ == nullptr) {
+        return false;
+    }
+    return systemApiAdapter_->IsAccessControlled(property);
+}
+
 int RuntimeContextImpl::SetSecurityOption(const std::string &filePath, const SecurityOption &option) const
 {
     std::lock_guard<std::recursive_mutex> autoLock(systemApiAdapterLock_);

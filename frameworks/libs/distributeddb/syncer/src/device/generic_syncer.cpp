@@ -1059,6 +1059,13 @@ void GenericSyncer::RecordTimeChangeOffset(void *changedOffset)
         metadata = metadata_;
         storage->IncRefCount();
     }
+    // The keys of the encrypted store are unloaded while the user screen is locked, accessing the
+    // database here would crash. Skip it, the offset is recorded on the next time change.
+    if (RuntimeContext::GetInstance()->IsAccessControlled(storage->GetProperty())) {
+        LOGW("[GenericSyncer] Access is controlled, skip recording time change offset");
+        storage->DecRefCount();
+        return;
+    }
     TimeOffset changedTimeOffset = *(reinterpret_cast<TimeOffset *>(changedOffset)) *
         static_cast<TimeOffset>(TimeHelper::TO_100_NS);
     TimeOffset orgOffset = metadata->GetLocalTimeOffset() - changedTimeOffset;

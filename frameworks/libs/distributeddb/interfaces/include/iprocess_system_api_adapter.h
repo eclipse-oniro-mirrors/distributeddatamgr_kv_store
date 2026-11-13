@@ -41,6 +41,14 @@ public:
     // Check is the access of this device in locked state
     virtual bool IsAccessControlled() const = 0;
 
+    // Check is the access of the store with the given property in locked state, the property may
+    // contain the user and the security area of the store. By default it falls back to the device
+    // level state.
+    virtual bool IsAccessControlled(const Property &property) const
+    {
+        return IsAccessControlled();
+    }
+
     // Set the SecurityOption to the targe filepath.
     // If the filePath is a directory, All the files and directories in the filePath should be effective.
     virtual DBStatus SetSecurityOption(const std::string &filePath, const SecurityOption &option) = 0;

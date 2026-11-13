@@ -114,6 +114,10 @@ public:
 
     virtual bool IsAccessControlled() const = 0;
 
+    // Check is the access of the store with the given property in locked state,
+    // the property may contain the user and the security area of the store.
+    virtual bool IsAccessControlled(const Property &property) const = 0;
+
     virtual int SetSecurityOption(const std::string &filePath, const SecurityOption &option) const = 0;
 
     virtual int GetSecurityOption(const std::string &filePath, SecurityOption &option) const = 0;

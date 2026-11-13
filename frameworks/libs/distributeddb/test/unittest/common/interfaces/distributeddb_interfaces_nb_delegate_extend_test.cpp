@@ -401,6 +401,106 @@ HWTEST_F(DistributedDBInterfacesNBDelegateExtendTest, TimeChangeWithDataChangeTe
 }
 #endif // DB_DEBUG_ENV
 
+namespace {
+    constexpr const char *PROPERTY_USER_ID = "userId";
+
+    // Adapter that records the consultation of the property based access control check, the keys of
+    // the el4 store are unloaded while the user screen is locked, the time change callback must not
+    // touch such database.
+    class AccessControlledPropertyAdapter final : public ProcessSystemApiAdapterImpl {
+    public:
+        using ProcessSystemApiAdapterImpl::IsAccessControlled;
+
+        bool IsAccessControlled(const Property &property) const override
+        {
+            std::lock_guard<std::mutex> autoLock(mutex_);
+            consulted_ = true;
+            hasUserId_ = property.find(PROPERTY_USER_ID) != property.end();
+            return controlled_;
+        }
+
+        void SetControlled(bool controlled)
+        {
+            controlled_ = controlled;
+        }
+
+        bool IsConsulted() const
+        {
+            std::lock_guard<std::mutex> autoLock(mutex_);
+            return consulted_;
+        }
+
+        bool HasUserIdInProperty() const
+        {
+            std::lock_guard<std::mutex> autoLock(mutex_);
+            return hasUserId_;
+        }
+
+    private:
+        mutable std::mutex mutex_;
+        mutable bool consulted_ = false;
+        mutable bool hasUserId_ = false;
+        bool controlled_ = true;
+    };
+} // namespace
+
+/**
+  * @tc.name: RuntimeContextIsAccessControlledWithPropertyTest001
+  * @tc.desc: Test the property based IsAccessControlled forwarding of the runtime context
+  * @tc.type: FUNC
+  * @tc.require:
+  * @tc.author: agent
+  */
+HWTEST_F(DistributedDBInterfacesNBDelegateExtendTest, RuntimeContextIsAccessControlledWithPropertyTest001,
+    TestSize.Level0)
+{
+    Property property = { { PROPERTY_USER_ID, static_cast<uint32_t>(100) } };
+    RuntimeContext::GetInstance()->SetProcessSystemApiAdapter(nullptr);
+    // without an adapter the check is not controlled, the legacy behavior is kept
+    EXPECT_FALSE(RuntimeContext::GetInstance()->IsAccessControlled(property));
+
+    auto adapter = std::make_shared<AccessControlledPropertyAdapter>();
+    RuntimeContext::GetInstance()->SetProcessSystemApiAdapter(adapter);
+    adapter->SetControlled(true);
+    EXPECT_TRUE(RuntimeContext::GetInstance()->IsAccessControlled(property));
+    EXPECT_TRUE(adapter->IsConsulted());
+
+    adapter->SetControlled(false);
+    EXPECT_FALSE(RuntimeContext::GetInstance()->IsAccessControlled(property));
+}
+
+/**
+  * @tc.name: RecordTimeChangeOffsetAccessControlledTest001
+  * @tc.desc: Test that the time change callback consults the property based access control check and
+  *           skips the timestamp upgrade while the access is controlled
+  * @tc.type: FUNC
+  * @tc.require:
+  * @tc.author: agent
+  */
+HWTEST_F(DistributedDBInterfacesNBDelegateExtendTest, RecordTimeChangeOffsetAccessControlledTest001, TestSize.Level1)
+{
+    auto adapter = std::make_shared<AccessControlledPropertyAdapter>();
+    adapter->SetControlled(true);
+    RuntimeContext::GetInstance()->SetProcessSystemApiAdapter(adapter);
+
+    KvStoreNbDelegate::Option option = {true, false, false};
+    g_mgr.GetKvStore("RecordTimeChangeOffsetAccessControlledTest001", option, g_kvNbDelegateCallback);
+    ASSERT_TRUE(g_kvNbDelegatePtr != nullptr);
+    EXPECT_EQ(g_kvDelegateStatus, OK);
+    EXPECT_EQ(g_kvNbDelegatePtr->SetProperty({ { PROPERTY_USER_ID, static_cast<uint32_t>(100) } }), OK);
+    EXPECT_EQ(g_kvNbDelegatePtr->Put(KEY_1, VALUE_1), OK);
+
+    // notify a fake time change, the callback runs synchronously on the notifier thread
+    RuntimeContext::GetInstance()->NotifyTimestampChanged(100); // 100 : fake time offset
+
+    EXPECT_TRUE(adapter->IsConsulted());
+    EXPECT_TRUE(adapter->HasUserIdInProperty());
+
+    EXPECT_EQ(g_mgr.CloseKvStore(g_kvNbDelegatePtr), OK);
+    g_kvNbDelegatePtr = nullptr;
+    EXPECT_EQ(g_mgr.DeleteKvStore("RecordTimeChangeOffsetAccessControlledTest001"), OK);
+}
+
 /**
   * @tc.name: ResultSetLimitTest001
   * @tc.desc: Get result set over limit
