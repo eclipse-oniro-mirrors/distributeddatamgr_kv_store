@@ -58,7 +58,7 @@ enum class BASE64_DECODE_CONSTANT : uint8_t {
 
 static inline bool IsBase64Char(const char c)
 {
-    return (isalnum(c) || (c == '+') || (c == '/'));
+    return (std::isalnum(static_cast<unsigned char>(c)) || (c == '+') || (c == '/'));
 }
 
 static void MakeCharFour(const std::array<uint8_t, CHAR_ARRAY_LENGTH_THREE> &charArrayThree,

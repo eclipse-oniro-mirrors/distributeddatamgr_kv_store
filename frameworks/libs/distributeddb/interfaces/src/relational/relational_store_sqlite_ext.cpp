@@ -835,7 +835,7 @@ int TraceCallback(uint32_t traceType, void *traceData, void *stmt, void*)
         return SQLITE_OK;
     }
     std::string sqlStr(sql);
-    std::transform(sqlStr.begin(), sqlStr.end(), sqlStr.begin(), ::tolower);
+    std::transform(sqlStr.begin(), sqlStr.end(), sqlStr.begin(), ToLowerChar);
     if (sqlStr.find("create table ") == std::string::npos) {
         return SQLITE_OK;
     }

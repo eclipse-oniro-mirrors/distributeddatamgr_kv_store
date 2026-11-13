@@ -17,6 +17,7 @@
 #define DISTRIBUTEDDB_TYPES_H
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -159,13 +160,27 @@ enum class StorageType : int32_t {
     STORAGE_TYPE_BLOB
 };
 
+// Safe wrappers for std::tolower/std::toupper. The C/C++ standard requires their argument to be
+// representable as an unsigned char (or EOF); a signed char holding a high-bit byte (0x80-0xFF)
+// sign-extends to a negative int, which is undefined behavior for these functions. Always route
+// the value through unsigned char first.
+inline char ToLowerChar(char c)
+{
+    return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+}
+
+inline char ToUpperChar(char c)
+{
+    return static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+}
+
 struct CaseInsensitiveComparator {
     bool operator() (const std::string& first, const std::string& second) const
     {
         std::string str1(first.length(), ' ');
         std::string str2(second.length(), ' ');
-        std::transform(first.begin(), first.end(), str1.begin(), ::tolower);
-        std::transform(second.begin(), second.end(), str2.begin(), ::tolower);
+        std::transform(first.begin(), first.end(), str1.begin(), ToLowerChar);
+        std::transform(second.begin(), second.end(), str2.begin(), ToLowerChar);
         return str1 < str2;
     }
 };

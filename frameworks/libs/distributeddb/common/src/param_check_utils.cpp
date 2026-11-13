@@ -15,6 +15,8 @@
 
 #include "param_check_utils.h"
 
+#include <cctype>
+
 #include "cloud/cloud_db_constant.h"
 #include "cloud/cloud_storage_utils.h"
 #include "db_common.h"
@@ -46,7 +48,8 @@ bool ParamCheckUtils::IsStoreIdSafe(const std::string &storeId, bool allowStoreI
 
     auto iter = std::find_if_not(storeId.begin(), storeId.end(),
         [allowStoreIdWithDot](char value) {
-        return (std::isalnum(value) || value == '_') || (allowStoreIdWithDot && value == '.');
+        return (std::isalnum(static_cast<unsigned char>(value)) || value == '_') ||
+            (allowStoreIdWithDot && value == '.');
     });
     if (iter != storeId.end()) {
         LOGE("Invalid store id format");
@@ -299,11 +302,11 @@ bool ParamCheckUtils::CheckSharedTableName(const DataBaseSchema &schema)
 void ParamCheckUtils::TransferSchemaToLower(DataBaseSchema &schema)
 {
     for (auto &tableSchema : schema.tables) {
-        std::transform(tableSchema.name.begin(), tableSchema.name.end(), tableSchema.name.begin(), ::tolower);
+        std::transform(tableSchema.name.begin(), tableSchema.name.end(), tableSchema.name.begin(), ToLowerChar);
         std::transform(tableSchema.sharedTableName.begin(), tableSchema.sharedTableName.end(),
-            tableSchema.sharedTableName.begin(), ::tolower);
+            tableSchema.sharedTableName.begin(), ToLowerChar);
         for (auto &field : tableSchema.fields) {
-            std::transform(field.colName.begin(), field.colName.end(), field.colName.begin(), ::tolower);
+            std::transform(field.colName.begin(), field.colName.end(), field.colName.begin(), ToLowerChar);
         }
     }
 }

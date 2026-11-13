@@ -221,7 +221,8 @@ int JsonObject::CheckJsonRepeatField(cJSON *object, bool isFirstFloor)
 bool IsFieldNameLegal(const std::string &fieldName)
 {
     for (auto oneChar : fieldName) {
-        if (!((isalpha(oneChar)) || (isdigit(oneChar)) || (oneChar == '_'))) {
+        if (!((std::isalpha(static_cast<unsigned char>(oneChar))) ||
+            (std::isdigit(static_cast<unsigned char>(oneChar))) || (oneChar == '_'))) {
             return false;
         }
     }
@@ -241,7 +242,7 @@ int JsonObject::CheckSubObj(std::set<std::string> &fieldSet, cJSON *subObj, int 
                 return -E_INVALID_ARGS;
             }
         }
-        if (!fieldName.empty() && isdigit(fieldName[0])) {
+        if (!fieldName.empty() && std::isdigit(static_cast<unsigned char>(fieldName[0]))) {
             return -E_INVALID_ARGS;
         }
     }

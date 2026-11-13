@@ -29,7 +29,7 @@ namespace DistributedDB {
 namespace {
     bool IsLegalFieldCharacter(char character)
     {
-        return (std::isalnum(character) || character == '_');
+        return (std::isalnum(static_cast<unsigned char>(character)) || character == '_');
     }
 
     // TYPE, [NOT NULL,] [DEFAULT X]
@@ -60,7 +60,7 @@ namespace {
 // Get symbol type and Converts to the corresponding column of the state transition matrix
 int SchemaUtils::MakeTrans(const std::string &oriContent, size_t &pos)
 {
-    if (isspace(oriContent[pos])) {
+    if (std::isspace(static_cast<unsigned char>(oriContent[pos]))) {
         return COLUMN_BLANK;
     } else if (oriContent.compare(pos, strlen(SchemaConstant::KEYWORD_ATTR_NOT_NULL),
         SchemaConstant::KEYWORD_ATTR_NOT_NULL) == 0) {
@@ -70,7 +70,7 @@ int SchemaUtils::MakeTrans(const std::string &oriContent, size_t &pos)
         SchemaConstant::KEYWORD_ATTR_DEFAULT) == 0) {
         pos = pos + strlen(SchemaConstant::KEYWORD_ATTR_DEFAULT) - 1;
         return COLUMN_DEFAULT;
-    } else if (std::isalnum(oriContent[pos]) || oriContent[pos] == '\'' ||
+    } else if (std::isalnum(static_cast<unsigned char>(oriContent[pos])) || oriContent[pos] == '\'' ||
         oriContent[pos] == '+' || oriContent[pos] == '-') {
         return COLUMN_OTHER_ALNUM;
     } else if (oriContent[pos] == ',') {
@@ -209,7 +209,7 @@ int SchemaUtils::TransToDouble(const std::string &defaultContent, SchemaAttribut
     // Disable scientific notation
     int dotCount = 0;
     for (const auto &iter : defaultContent) {
-        if (!(std::isdigit(iter) || iter == '.' || iter == '-' || iter == '+')) {
+        if (!(std::isdigit(static_cast<unsigned char>(iter)) || iter == '.' || iter == '-' || iter == '+')) {
             LOGE("Default value to double, exist invalid symbol[%c]", iter);
             return -E_SCHEMA_PARSE_FAIL;
         }
@@ -427,7 +427,7 @@ int SchemaUtils::CheckFieldName(const FieldName &inName)
     }
 
     // The first letter must be a number or an underscore
-    if (!(std::isalpha(inName[0]) || inName[0] == '_')) {
+    if (!(std::isalpha(static_cast<unsigned char>(inName[0])) || inName[0] == '_')) {
         LOGE("Schema FieldName begin with un support symbol!");
         return -E_SCHEMA_PARSE_FAIL;
     }
@@ -477,7 +477,7 @@ std::string SchemaUtils::FieldPathString(const FieldPath &inPath)
 void SchemaUtils::TransTrackerSchemaToLower(const TrackerSchema &srcSchema, TrackerSchema &destSchema)
 {
     std::string tableName(srcSchema.tableName.length(), ' ');
-    std::transform(srcSchema.tableName.begin(), srcSchema.tableName.end(), tableName.begin(), ::tolower);
+    std::transform(srcSchema.tableName.begin(), srcSchema.tableName.end(), tableName.begin(), ToLowerChar);
     destSchema.tableName = tableName;
     for (const auto &extendColName : srcSchema.extendColNames) {
         destSchema.extendColNames.insert(DBCommon::ToLowerCase(extendColName));

@@ -107,10 +107,11 @@ bool JsonCommon::CheckNode(JsonObject &node)
             }
         }
         for (size_t i = 0; i < fieldName.size(); i++) {
-            if (!((isalpha(fieldName[i])) || (isdigit(fieldName[i])) || fieldName[i] == '_')) {
+            if (!((std::isalpha(static_cast<unsigned char>(fieldName[i]))) ||
+                (std::isdigit(static_cast<unsigned char>(fieldName[i]))) || fieldName[i] == '_')) {
                 return false;
             }
-            if (i == 0 && (isdigit(fieldName[i]))) {
+            if (i == 0 && (std::isdigit(static_cast<unsigned char>(fieldName[i])))) {
                 return false;
             }
         }
@@ -132,8 +133,10 @@ bool JsonCommon::CheckJsonField(JsonObject &jsonObj)
 static bool CheckNodeSingleCharacter(const std::string &fieldName, bool isFirstLevel, int &errCode)
 {
     for (size_t i = 0; i < fieldName.size(); i++) {
-        if ((i == 0 && (isdigit(fieldName[i]))) || !((isalpha(fieldName[i])) ||
-            (isdigit(fieldName[i])) || (fieldName[i] == '_') || (isFirstLevel && fieldName[i] == '.'))) {
+        if ((i == 0 && (std::isdigit(static_cast<unsigned char>(fieldName[i])))) ||
+            !((std::isalpha(static_cast<unsigned char>(fieldName[i]))) ||
+            (std::isdigit(static_cast<unsigned char>(fieldName[i]))) || (fieldName[i] == '_') ||
+            (isFirstLevel && fieldName[i] == '.'))) {
             errCode = -E_INVALID_ARGS;
             return false;
         }
@@ -328,7 +331,7 @@ void JsonObjectIterator(const JsonObject &obj, JsonFieldPath path,
 bool IsNumber(const std::string &str)
 {
     return std::all_of(str.begin(), str.end(), [](char c) {
-        return std::isdigit(c);
+        return std::isdigit(static_cast<unsigned char>(c));
     });
 }
 
