@@ -441,10 +441,26 @@ void TrackerTable::CheckExistDirtyLog(sqlite3 *db)
     repairInfo_.existDirtyLog = isExistDirtyLog;
 }
 
+void TrackerTable::CheckMissingCursor(sqlite3 *db, bool isMemory)
+{
+    Value key;
+    DBCommon::StringToVector(DBCommon::GetCursorKey(tableName_), key);
+    Value value;
+    int errCode = SQLiteRelationalUtils::GetKvData(db, isMemory, key, value);
+    if (errCode == -E_NOT_FOUND) {
+        repairInfo_.missingCursor = true;
+        return;
+    }
+    if (errCode != E_OK) {
+        LOGW("[TrackerTable] Check missing cursor of table[%s length[%zu]] failed %d",
+            DBCommon::StringMiddleMasking(tableName_).c_str(), tableName_.length(), errCode);
+    }
+}
+
 bool TrackerTable::IsNeedRepair()
 {
     return (!repairInfo_.createTriggerSqls.empty() || !repairInfo_.misDataKeys.empty() ||
-        repairInfo_.existNullExtend || repairInfo_.existDirtyLog);
+        repairInfo_.existNullExtend || repairInfo_.existDirtyLog || repairInfo_.missingCursor);
 }
 
 void TrackerTable::Repair(std::function<void(const RepairInfo &, const std::string &,

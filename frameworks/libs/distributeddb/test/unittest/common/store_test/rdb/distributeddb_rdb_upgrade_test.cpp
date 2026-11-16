@@ -226,4 +226,43 @@ HWTEST_F(DistributedDBRDBUpgradeTest, UpgradeTracker004, TestSize.Level2)
     t1.join();
     t2.join();
 }
+
+/**
+ * @tc.name: UpgradeTracker005
+ * @tc.desc: Test cursor is auto initialized in meta table when missing during tracker integrity repair.
+ * @tc.type: FUNC
+ * @tc.author: zqq
+ */
+HWTEST_F(DistributedDBRDBUpgradeTest, UpgradeTracker005, TestSize.Level0)
+{
+    /**
+     * @tc.steps: step1. Init delegate and set tracker schema.
+     * @tc.expected: step1. Ok
+     */
+    ASSERT_NO_FATAL_FAILURE(InitUpgradeDelegate());
+    auto info1 = GetStoreInfo1();
+    EXPECT_EQ(SetTrackerTables(info1, {DEVICE_SYNC_TABLE}), E_OK);
+    /**
+     * @tc.steps: step2. Check cursor exists in meta table.
+     * @tc.expected: step2. Cursor row exists.
+     */
+    const std::string metaTableName = std::string(DBConstant::RELATIONAL_PREFIX) + "metadata";
+    const std::string cursorKey = DBCommon::GetCursorKey(DEVICE_SYNC_TABLE);
+    // key column is BLOB; compare with hex literal x'...' (same as cloud_storage_utils_client.cpp).
+    const std::string cursorCond = "key=x'" + DBCommon::TransferStringToHex(cursorKey) + "'";
+    EXPECT_EQ(CountTableData(info1, metaTableName, cursorCond), 1);
+    /**
+     * @tc.steps: step3. Remove cursor from meta table to simulate missing cursor.
+     * @tc.expected: step3. Cursor row deleted.
+     */
+    std::string sql = "DELETE FROM " + metaTableName + " WHERE " + cursorCond;
+    EXPECT_EQ(ExecuteSQL(sql, info1), E_OK);
+    EXPECT_EQ(CountTableData(info1, metaTableName, cursorCond), 0);
+    /**
+     * @tc.steps: step4. Set tracker tables with same schema to trigger TrackerIntegrityRepair.
+     * @tc.expected: step4. Cursor row re-initialized in meta table.
+     */
+    EXPECT_EQ(SetTrackerTables(info1, {DEVICE_SYNC_TABLE}), E_OK);
+    EXPECT_EQ(CountTableData(info1, metaTableName, cursorCond), 1);
+}
 }

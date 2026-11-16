@@ -37,6 +37,7 @@ public:
         std::string misDataKeys;
         bool existNullExtend = false;
         bool existDirtyLog = false;
+        bool missingCursor = false;
     };
 
     std::string GetTableName() const;
@@ -72,6 +73,7 @@ public:
     void CheckMismatchedDataKeys(sqlite3 *db);
     void CheckNullExtendLog(sqlite3 *db);
     void CheckExistDirtyLog(sqlite3 *db);
+    void CheckMissingCursor(sqlite3 *db, bool isMemory);
     bool IsNeedRepair();
     void Repair(std::function<void(const RepairInfo &, const std::string &, const std::set<std::string> &)> repairFunc);
     static std::string IsEmptyExtendSQL();
