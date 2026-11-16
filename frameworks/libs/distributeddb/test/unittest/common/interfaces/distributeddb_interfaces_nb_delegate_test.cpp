@@ -2465,6 +2465,60 @@ HWTEST_F(DistributedDBInterfacesNBDelegateTest, MaxLogSize001, TestSize.Level2)
     EXPECT_TRUE(g_mgr.DeleteKvStore("MaxLogSize001") == OK);
 }
 
+/**
+ * @tc.name: MaxLogSize003
+ * @tc.desc: Test the lower limit of the max log size after the checkpoint threshold change.
+ * @tc.type: FUNC
+ * @tc.require:
+ * @tc.author: zhutianqi
+ */
+HWTEST_F(DistributedDBInterfacesNBDelegateTest, MaxLogSize003, TestSize.Level2)
+{
+    /**
+     * @tc.steps:step1. Create database.
+     * @tc.expected: step1. Returns a non-null kvstore.
+     */
+    KvStoreNbDelegate::Option option;
+    g_mgr.GetKvStore("MaxLogSize003", option, g_kvNbDelegateCallback);
+    ASSERT_TRUE(g_kvNbDelegatePtr != nullptr);
+    EXPECT_TRUE(g_kvDelegateStatus == OK);
+
+    /**
+     * @tc.steps:step2. Check the lower limit of the max log size is 16K after the threshold change.
+     * @tc.expected: step2. The lower limit equals 16K.
+     */
+    EXPECT_EQ(DBConstant::MAX_LOG_SIZE_LOW, 16 * 1024ULL); // 16K
+
+    /**
+     * @tc.steps:step3. Setting the max log limit for the values which were invalid before the
+     * threshold change (below the old 4M lower limit) but valid now.
+     * @tc.expected: step3. Returns OK.
+     */
+    uint64_t logSize = DBConstant::MAX_LOG_SIZE_LOW; // the new lower limit boundary itself
+    PragmaData pragLimit = static_cast<PragmaData>(&logSize);
+    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SET_MAX_LOG_LIMIT, pragLimit), OK);
+
+    logSize = 1 * 1024 * 1024; // 1M, below the old 4M lower limit, valid after the change
+    pragLimit = static_cast<PragmaData>(&logSize);
+    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SET_MAX_LOG_LIMIT, pragLimit), OK);
+
+    logSize = 4 * 1024 * 1024; // 4M, the old lower limit, still valid for compatibility
+    pragLimit = static_cast<PragmaData>(&logSize);
+    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SET_MAX_LOG_LIMIT, pragLimit), OK);
+
+    /**
+     * @tc.steps:step4. Setting the max log limit below the new lower limit.
+     * @tc.expected: step4. Returns INVALID_ARGS.
+     */
+    logSize = DBConstant::MAX_LOG_SIZE_LOW - 1;
+    pragLimit = static_cast<PragmaData>(&logSize);
+    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SET_MAX_LOG_LIMIT, pragLimit), INVALID_ARGS);
+
+    EXPECT_EQ(g_mgr.CloseKvStore(g_kvNbDelegatePtr), OK);
+    g_kvNbDelegatePtr = nullptr;
+    EXPECT_TRUE(g_mgr.DeleteKvStore("MaxLogSize003") == OK);
+}
+
 #ifdef USE_DISTRIBUTEDDB_DEVICE
 /**
  * @tc.name: ForceCheckpoint002
