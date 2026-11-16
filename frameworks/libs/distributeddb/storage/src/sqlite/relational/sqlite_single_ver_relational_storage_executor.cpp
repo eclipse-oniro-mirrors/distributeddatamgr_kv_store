@@ -1181,7 +1181,7 @@ int SQLiteSingleVerRelationalStorageExecutor::CheckDBModeForRelational()
     int errCode = SQLiteUtils::GetJournalMode(dbHandle_, journalMode);
 
     for (auto &c : journalMode) { // convert to lowercase
-        c = static_cast<char>(std::tolower(c));
+        c = ToLowerChar(c);
     }
 
     if (errCode == E_OK && journalMode != "wal") {

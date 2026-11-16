@@ -63,7 +63,7 @@ void DBCommon::RTrim(std::string &oriString)
 bool DBCommon::CheckIsAlnumOrUnderscore(const std::string &text)
 {
     auto iter = std::find_if_not(text.begin(), text.end(), [](char c) {
-        return (std::isalnum(c) || c == '_');
+        return (std::isalnum(static_cast<unsigned char>(c)) || c == '_');
     });
     return iter == text.end();
 }
@@ -71,14 +71,14 @@ bool DBCommon::CheckIsAlnumOrUnderscore(const std::string &text)
 std::string DBCommon::ToLowerCase(const std::string &str)
 {
     std::string res(str.length(), ' ');
-    std::transform(str.begin(), str.end(), res.begin(), ::tolower);
+    std::transform(str.begin(), str.end(), res.begin(), ToLowerChar);
     return res;
 }
 
 std::string DBCommon::ToUpperCase(const std::string &str)
 {
     std::string res(str.length(), ' ');
-    std::transform(str.begin(), str.end(), res.begin(), ::toupper);
+    std::transform(str.begin(), str.end(), res.begin(), ToUpperChar);
     return res;
 }
 
@@ -165,7 +165,7 @@ std::string DBCommon::TrimSpace(const std::string &input)
     res.reserve(input.length());
     bool isPreSpace = true;
     for (char c : input) {
-        if (std::isspace(c)) {
+        if (std::isspace(static_cast<unsigned char>(c))) {
             isPreSpace = true;
         } else {
             if (!res.empty() && isPreSpace) {

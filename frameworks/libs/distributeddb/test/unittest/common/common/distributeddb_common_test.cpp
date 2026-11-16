@@ -15,7 +15,9 @@
 
 #include <gtest/gtest.h>
 
+#include <clocale>
 #include <cstdio>
+#include <set>
 #include <thread>
 
 #include "securec.h"
@@ -1410,5 +1412,87 @@ HWTEST_F(DistributedDBCommonTest, CalHash001, TestSize.Level0)
         hashHex += buf;
     }
     EXPECT_EQ(hashHex, expect);
+}
+
+/**
+ * @tc.name: CaseTransferWithHighByteUtf8001
+ * @tc.desc: Test ToLowerCase/ToUpperCase with UTF-8 strings containing high-bit bytes (>= 0x80)
+ * @tc.type: FUNC
+ */
+HWTEST_F(DistributedDBCommonTest, CaseTransferWithHighByteUtf8001, TestSize.Level1)
+{
+    // Regression test for the signed char UB fix: high-bit bytes used to reach
+    // std::tolower/std::toupper as negative ints (out-of-range ctype table lookup).
+    // Pin the locale so the "high bytes are preserved" expectation is explicit.
+    (void)setlocale(LC_CTYPE, "C");
+
+    // UTF-8 strings containing bytes >= 0x80 ("你好世界" and mixed ASCII + high-bit bytes)
+    const std::string utf8Str = "\xE4\xBD\xA0\xE5\xA5\xBD\xE4\xB8\x96\xE7\x95\x8C";
+    const std::string mixedStr = "AbC\xC3\x89\xE4\xBD\xA0xYz123";
+
+    // Must not crash (also verified under sanitizers); under the "C" locale high-bit
+    // bytes have no case mapping and are preserved as-is
+    EXPECT_EQ(DBCommon::ToLowerCase(utf8Str), utf8Str);
+    EXPECT_EQ(DBCommon::ToUpperCase(utf8Str), utf8Str);
+
+    // ASCII part is converted, high-bit part is preserved
+    EXPECT_EQ(DBCommon::ToLowerCase(mixedStr), "abc\xC3\x89\xE4\xBD\xA0xyz123");
+    EXPECT_EQ(DBCommon::ToUpperCase(mixedStr), "ABC\xC3\x89\xE4\xBD\xA0XYZ123");
+
+    // Repeated conversion is idempotent, results stay stable
+    EXPECT_EQ(DBCommon::ToLowerCase(DBCommon::ToLowerCase(mixedStr)), DBCommon::ToLowerCase(mixedStr));
+    EXPECT_EQ(DBCommon::ToUpperCase(DBCommon::ToUpperCase(mixedStr)), DBCommon::ToUpperCase(mixedStr));
+}
+
+/**
+ * @tc.name: CaseInsensitiveComparatorWithHighByteUtf8001
+ * @tc.desc: Test CaseInsensitiveComparator stability with high-bit UTF-8 bytes
+ * @tc.type: FUNC
+ */
+HWTEST_F(DistributedDBCommonTest, CaseInsensitiveComparatorWithHighByteUtf8001, TestSize.Level1)
+{
+    (void)setlocale(LC_CTYPE, "C");
+
+    const std::string utf8Str = "\xE4\xBD\xA0\xE5\xA5\xBD\xE4\xB8\x96\xE7\x95\x8C";
+    CaseInsensitiveComparator comparator;
+
+    // A string never compares "less" than itself and the result is stable across calls
+    EXPECT_FALSE(comparator(utf8Str, utf8Str));
+    EXPECT_EQ(comparator(utf8Str, utf8Str), comparator(utf8Str, utf8Str));
+
+    // Deterministic ordering under the "C" locale: std::string comparison follows unsigned
+    // char semantics, so a leading high-bit byte (0xE4) always sorts after any ASCII letter
+    EXPECT_FALSE(comparator(utf8Str, std::string("abc")));
+    EXPECT_TRUE(comparator(std::string("abc"), utf8Str));
+
+    // Usable as an associative container comparator with high-bit keys without crashing;
+    // ASCII keys differing only in case collapse to one entry
+    std::set<std::string, CaseInsensitiveComparator> caseInsensitiveSet;
+    caseInsensitiveSet.insert(utf8Str);
+    caseInsensitiveSet.insert("ABC");
+    caseInsensitiveSet.insert("abc");
+    ASSERT_EQ(caseInsensitiveSet.size(), static_cast<size_t>(2));
+    EXPECT_NE(caseInsensitiveSet.find(utf8Str), caseInsensitiveSet.end());
+    EXPECT_NE(caseInsensitiveSet.find("aBc"), caseInsensitiveSet.end());
+}
+
+/**
+ * @tc.name: HighByteInputValidation001
+ * @tc.desc: Test alnum and schema field name checks safely reject strings containing high-bit bytes
+ * @tc.type: FUNC
+ */
+HWTEST_F(DistributedDBCommonTest, HighByteInputValidation001, TestSize.Level1)
+{
+    (void)setlocale(LC_CTYPE, "C");
+
+    const std::string mixedStr = "AbC\xC3\x89\xE4\xBD\xA0xYz123";
+
+    // High-bit bytes are not alnum/underscore: rejected without crash or misjudgement
+    EXPECT_FALSE(DBCommon::CheckIsAlnumOrUnderscore(mixedStr));
+    EXPECT_TRUE(DBCommon::CheckIsAlnumOrUnderscore("Abc_123"));
+
+    // Schema field names containing high-bit bytes are rejected with a parse error
+    EXPECT_EQ(SchemaUtils::CheckFieldName(mixedStr), -E_SCHEMA_PARSE_FAIL);
+    EXPECT_EQ(SchemaUtils::CheckFieldName("legal_name1"), E_OK);
 }
 }

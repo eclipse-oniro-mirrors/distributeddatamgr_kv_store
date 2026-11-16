@@ -66,7 +66,7 @@ int CloudStorageUtils::TextToVector(const VBucket &vBucket, const Field &field, 
         return -E_CLOUD_ERROR;
     }
     if (collateType == CollateType::COLLATE_NOCASE) {
-        std::transform(val.begin(), val.end(), val.begin(), ::toupper);
+        std::transform(val.begin(), val.end(), val.begin(), ToUpperChar);
     } else if (collateType == CollateType::COLLATE_RTRIM) {
         DBCommon::RTrim(val);
     }
@@ -148,7 +148,7 @@ void CloudStorageUtils::TransferFieldToLower(VBucket &vBucket)
 {
     for (auto it = vBucket.begin(); it != vBucket.end();) {
         std::string lowerField(it->first.length(), ' ');
-        std::transform(it->first.begin(), it->first.end(), lowerField.begin(), ::tolower);
+        std::transform(it->first.begin(), it->first.end(), lowerField.begin(), ToLowerChar);
         if (lowerField != it->first) {
             vBucket[lowerField] = std::move(vBucket[it->first]);
             vBucket.erase(it++);
@@ -162,7 +162,7 @@ bool CloudStorageUtils::GetTypeCaseInsensitive(const std::string &fieldName, con
 {
     auto tmpFieldName = fieldName;
     auto tmpVBucket = vBucket;
-    std::transform(tmpFieldName.begin(), tmpFieldName.end(), tmpFieldName.begin(), ::tolower);
+    std::transform(tmpFieldName.begin(), tmpFieldName.end(), tmpFieldName.begin(), ToLowerChar);
     TransferFieldToLower(tmpVBucket);
     auto it = tmpVBucket.find(tmpFieldName);
     if (it == tmpVBucket.end()) {

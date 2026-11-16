@@ -533,7 +533,7 @@ int QueryObject::CheckPrimaryKey(const std::map<int, FieldName> &primaryKeyMap) 
     std::set<std::string> pkSet;
     for (const auto &item : primaryKeyMap) {
         std::string pk = item.second;
-        std::transform(pk.begin(), pk.end(), pk.begin(), ::tolower);
+        std::transform(pk.begin(), pk.end(), pk.begin(), ToLowerChar);
         pkSet.insert(pk);
     }
     std::set<std::string> queryPkSet;
@@ -543,7 +543,7 @@ int QueryObject::CheckPrimaryKey(const std::map<int, FieldName> &primaryKeyMap) 
             continue;
         }
         std::string field = queryObjNode.fieldName;
-        std::transform(field.begin(), field.end(), field.begin(), ::tolower);
+        std::transform(field.begin(), field.end(), field.begin(), ToLowerChar);
         if (pkSet.find(field) == pkSet.end()) {
             LOGE("[Query] query without pk!");
             return -E_NOT_SUPPORT;

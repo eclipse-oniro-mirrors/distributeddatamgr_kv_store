@@ -87,12 +87,14 @@ static int CheckSingleFilterPath(std::vector<std::string> &singleFilterPath)
             return -E_INVALID_ARGS;
         }
         for (auto oneChar : singleFilterPath[j]) {
-            if (!((isalpha(oneChar)) || (isdigit(oneChar)) || (oneChar == '_'))) {
+            if (!((std::isalpha(static_cast<unsigned char>(oneChar))) ||
+                (std::isdigit(static_cast<unsigned char>(oneChar))) || (oneChar == '_'))) {
                 return -E_INVALID_ARGS;
             }
         }
     }
-    if (!singleFilterPath.empty() && !singleFilterPath[0].empty() && isdigit(singleFilterPath[0][0])) {
+    if (!singleFilterPath.empty() && !singleFilterPath[0].empty() &&
+        std::isdigit(static_cast<unsigned char>(singleFilterPath[0][0]))) {
         return -E_INVALID_ARGS;
     }
     return E_OK;
@@ -179,7 +181,8 @@ static int CheckSingleUpdataDocPath(std::vector<std::string> &singleUpdataPath)
 {
     for (const auto &fieldName : singleUpdataPath) {
         for (auto oneChar : fieldName) {
-            if (!((isalpha(oneChar)) || (isdigit(oneChar)) || (oneChar == '_'))) {
+            if (!((std::isalpha(static_cast<unsigned char>(oneChar))) ||
+                (std::isdigit(static_cast<unsigned char>(oneChar))) || (oneChar == '_'))) {
                 GLOGE("updata fieldName is illegal");
                 return -E_INVALID_ARGS;
             }
@@ -224,10 +227,11 @@ static int CheckSingleProjectionDocPath(std::vector<std::string> &singleProjecti
             return -E_INVALID_ARGS;
         }
         for (size_t j = 0; j < fieldName.size(); j++) {
-            if (!((isalpha(fieldName[j])) || (isdigit(fieldName[j])) || (fieldName[j] == '_'))) {
+            if (!((std::isalpha(static_cast<unsigned char>(fieldName[j]))) ||
+                (std::isdigit(static_cast<unsigned char>(fieldName[j]))) || (fieldName[j] == '_'))) {
                 return -E_INVALID_ARGS;
             }
-            if (j == 0 && (isdigit(fieldName[j]))) {
+            if (j == 0 && (std::isdigit(static_cast<unsigned char>(fieldName[j])))) {
                 return -E_INVALID_ARGS;
             }
         }

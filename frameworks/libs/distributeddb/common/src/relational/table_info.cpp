@@ -74,7 +74,7 @@ static StorageType AffinityType(const std::string &dataType)
     StorageType type = StorageType::STORAGE_TYPE_NULL;
     uint32_t hex = 0;
     for (uint32_t i = 0; i < dataType.length(); i++) {
-        hex = (hex << 8) + static_cast<uint32_t>((std::tolower(dataType[i]))); // 8: shift length
+        hex = (hex << 8) + static_cast<uint32_t>(ToLowerChar(dataType[i])); // 8: shift length
         if (hex == affinityTable[AFFINITY_CHAR]) {
             type = StorageType::STORAGE_TYPE_TEXT;
         } else if (hex == affinityTable[AFFINITY_CLOB]) {
@@ -100,7 +100,7 @@ static StorageType AffinityType(const std::string &dataType)
 void FieldInfo::SetDataType(const std::string &dataType)
 {
     dataType_ = dataType;
-    std::transform(dataType_.begin(), dataType_.end(), dataType_.begin(), ::tolower);
+    std::transform(dataType_.begin(), dataType_.end(), dataType_.begin(), ToLowerChar);
     if (IsAssetType() || IsAssetsType()) {
         storageType_ = StorageType::STORAGE_TYPE_BLOB; // use for cloud sync
     } else if (dataType_ == DBConstant::STORAGE_TYPE_LONG) {
@@ -335,7 +335,7 @@ void TableInfo::SetCreateTableSql(const std::string &sql)
 {
     sql_ = sql;
     for (auto &c : sql_) {
-        c = static_cast<char>(std::toupper(c));
+        c = ToUpperChar(c);
     }
     if (DBCommon::HasConstraint(DBCommon::TrimSpace(sql_), "AUTOINCREMENT", " ", " ,)")) {
         autoInc_ = true;
