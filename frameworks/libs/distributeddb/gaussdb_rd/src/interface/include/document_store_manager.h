@@ -25,9 +25,9 @@ namespace DocumentDB {
 class DocumentStoreManager {
 public:
     static int GetDocumentStore(const std::string &path, const std::string &config, uint32_t flags,
-        DocumentStore *&store);
+        std::shared_ptr<DocumentStore> &store);
 
-    static int CloseDocumentStore(DocumentStore *store, uint32_t flags);
+    static int CloseDocumentStore(std::shared_ptr<DocumentStore> &store, uint32_t flags);
 
 private:
     static int CheckDBPath(const std::string &path, std::string &canonicalPath, std::string &dbName);

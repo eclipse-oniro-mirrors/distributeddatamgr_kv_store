@@ -127,7 +127,7 @@ private:
     void GetKvStoreInner(const std::string &storeId, const KvStoreNbDelegate::Option &option,
         const std::function<void(DBStatus, KvStoreNbDelegate *)> &callback, void *handle);
 
-    const std::string &GetKvStorePath() const;
+    const std::string GetKvStorePath() const;
     static bool CheckOptionValid(const KvStoreNbDelegate::Option &option);
     static const std::string DEFAULT_PROCESS_APP_ID;
     static std::mutex communicatorMutex_;

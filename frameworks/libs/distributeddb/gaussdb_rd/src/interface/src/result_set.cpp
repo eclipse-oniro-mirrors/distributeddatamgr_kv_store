@@ -14,6 +14,8 @@
 */
 #include "result_set.h"
 
+#include <utility>
+
 #include "document_key.h"
 #include "rd_db_constant.h"
 #include "rd_log_print.h"
@@ -26,6 +28,7 @@ ResultSet::ResultSet() {}
 ResultSet::~ResultSet()
 {
     context_ = nullptr;
+    store_ = nullptr;
 }
 int ResultSet::EraseCollection()
 {
@@ -34,11 +37,11 @@ int ResultSet::EraseCollection()
     }
     return E_OK;
 }
-int ResultSet::Init(std::shared_ptr<QueryContext> &context, DocumentStore *store, bool isCutBranch)
+int ResultSet::Init(std::shared_ptr<QueryContext> context, std::shared_ptr<DocumentStore> store, bool isCutBranch)
 {
     isCutBranch_ = isCutBranch;
-    context_ = context;
-    store_ = store;
+    context_ = std::move(context);
+    store_ = std::move(store);
     return E_OK;
 }
 

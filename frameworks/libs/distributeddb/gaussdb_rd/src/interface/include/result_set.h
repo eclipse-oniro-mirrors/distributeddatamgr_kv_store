@@ -31,7 +31,7 @@ class ResultSet {
 public:
     ResultSet();
     ~ResultSet();
-    int Init(std::shared_ptr<QueryContext> &context, DocumentStore *store, bool isCutBranch);
+    int Init(std::shared_ptr<QueryContext> context, std::shared_ptr<DocumentStore> store, bool isCutBranch);
     int GetNext(bool isNeedTransaction = false, bool isNeedCheckTable = false);
     int GetValue(char **value);
     int GetValue(std::string &value);
@@ -48,7 +48,7 @@ private:
     int CutJsonBranchInner(JsonObject &cjsonObj, bool viewType, bool isIdExistInValue,
         bool &isInsertIdflag);
 
-    DocumentStore *store_ = nullptr;
+    std::shared_ptr<DocumentStore> store_ = nullptr;
     bool isCutBranch_ = false;
     size_t index_ = 0;
     std::shared_ptr<QueryContext> context_;

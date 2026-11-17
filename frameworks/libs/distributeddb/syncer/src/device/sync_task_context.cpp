@@ -160,7 +160,7 @@ void SyncTaskContext::Clear()
     isNeedRetry_ = NO_NEED_RETRY;
     mode_ = SyncModeType::INVALID_MODE;
     status_ = SyncOperation::OP_WAITING;
-    taskErrCode_ = E_OK;
+    SetTaskErrCode(E_OK);
     packetId_ = 0;
     isAutoSubscribe_ = false;
 }
@@ -596,7 +596,7 @@ void SyncTaskContext::CopyTargetData(const ISyncTarget *target, const TaskParam 
     mode_ = target->GetMode();
     status_ = SyncOperation::OP_SYNCING;
     isNeedRetry_ = SyncTaskContext::NO_NEED_RETRY;
-    taskErrCode_ = E_OK;
+    SetTaskErrCode(E_OK);
     packetId_ = 0;
     isCommNormal_ = true; // reset comm status here
     commErrCode_ = E_OK;
@@ -680,12 +680,12 @@ void SyncTaskContext::CancelCurrentSyncRetryIfNeed(int newTargetMode, uint32_t s
 
 int SyncTaskContext::GetTaskErrCode() const
 {
-    return taskErrCode_;
+    return taskErrCode_.load(std::memory_order_acquire);
 }
 
 void SyncTaskContext::SetTaskErrCode(int errCode)
 {
-    taskErrCode_ = errCode;
+    taskErrCode_.store(errCode, std::memory_order_release);
 }
 
 bool SyncTaskContext::IsSyncTaskNeedRetry() const

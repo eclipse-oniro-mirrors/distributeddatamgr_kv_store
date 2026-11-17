@@ -578,7 +578,7 @@ bool KvStoreDelegateManager::IsDataDirSafe(const std::string &dataDir, std::stri
     return ParamCheckUtils::CheckDataDir(dataDir, canonicalDir);
 }
 
-const std::string &KvStoreDelegateManager::GetKvStorePath() const
+const std::string KvStoreDelegateManager::GetKvStorePath() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     return kvStoreConfig_.dataDir;
