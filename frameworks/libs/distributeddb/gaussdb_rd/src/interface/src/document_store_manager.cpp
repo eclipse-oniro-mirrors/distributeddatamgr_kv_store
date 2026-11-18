@@ -50,7 +50,7 @@ std::mutex DocumentStoreManager::openCloseMutex_;
 std::map<std::string, int> DocumentStoreManager::dbConnCount_;
 
 int DocumentStoreManager::GetDocumentStore(const std::string &path, const std::string &config, uint32_t flags,
-    DocumentStore *&store)
+    std::shared_ptr<DocumentStore> &store)
 {
     std::string canonicalPath;
     std::string dbName;
@@ -88,7 +88,7 @@ int DocumentStoreManager::GetDocumentStore(const std::string &path, const std::s
         return errCode;
     }
 
-    store = new (std::nothrow) DocumentStore(executor);
+    store.reset(new (std::nothrow) DocumentStore(executor));
     if (store == nullptr) {
         delete executor;
         GLOGE("Memory allocation failed!");
@@ -107,7 +107,7 @@ int DocumentStoreManager::GetDocumentStore(const std::string &path, const std::s
     return errCode;
 }
 
-int DocumentStoreManager::CloseDocumentStore(DocumentStore *store, uint32_t flags)
+int DocumentStoreManager::CloseDocumentStore(std::shared_ptr<DocumentStore> &store, uint32_t flags)
 {
     if (!CheckDBCloseFlag(flags)) {
         GLOGE("Check document db close flags failed.");
@@ -120,8 +120,7 @@ int DocumentStoreManager::CloseDocumentStore(DocumentStore *store, uint32_t flag
         GLOGE("Close document store failed. %d", errCode);
         return errCode;
     }
-
-    delete store;
+    store = nullptr;
     return E_OK;
 }
 

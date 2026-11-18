@@ -29,7 +29,7 @@ int32_t GRD_DBOpenInner(const char *dbPath, const char *configStr, uint32_t flag
     }
     std::string path = (dbPath == nullptr ? "" : dbPath);
     std::string config = (configStr == nullptr ? "" : configStr);
-    DocumentStore *store = nullptr;
+    std::shared_ptr<DocumentStore> store = nullptr;
     int ret = DocumentStoreManager::GetDocumentStore(path, config, flags, store);
     if (ret != E_OK || store == nullptr) {
         return TransferDocErr(ret);
@@ -57,7 +57,6 @@ int32_t GRD_DBCloseInner(GRD_DB *db, uint32_t flags)
         return TransferDocErr(ret);
     }
 
-    db->store_ = nullptr;
     delete db;
     return GRD_OK;
 }

@@ -264,7 +264,7 @@ private:
     std::deque<Message *> msgQueue_;
     volatile uint32_t execTaskCount_;
     std::string label_;
-    volatile bool isSyncRetry_;
+    std::atomic<bool> isSyncRetry_;
     std::mutex communicatorProxyLock_;
     CommunicatorProxy *communicatorProxy_;
     std::mutex equalCommunicatorsLock_;

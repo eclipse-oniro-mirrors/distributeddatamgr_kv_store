@@ -26,7 +26,7 @@
 
 struct GRD_ResultSet;
 namespace DocumentDB {
-class DocumentStore {
+class DocumentStore : public std::enable_shared_from_this<DocumentStore> {
 public:
     DocumentStore(KvStoreExecutor *);
     ~DocumentStore();

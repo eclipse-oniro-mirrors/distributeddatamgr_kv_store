@@ -21,7 +21,7 @@
 #include "grd_base/grd_error.h"
 
 typedef struct GRD_DB {
-    DocumentDB::DocumentStore *store_ = nullptr;
+    std::shared_ptr<DocumentDB::DocumentStore> store_ = nullptr;
 } GRD_DB;
 
 #endif // GRD_TYPE_INNER_H

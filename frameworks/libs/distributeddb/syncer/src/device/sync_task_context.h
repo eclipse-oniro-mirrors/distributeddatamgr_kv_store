@@ -299,7 +299,7 @@ protected:
     volatile uint64_t remoteSoftwareVersionId_; // Check if the remoteSoftwareVersion_ is is overdue
 
     volatile bool isCommNormal_;
-    volatile int taskErrCode_;
+    std::atomic<int> taskErrCode_;
     std::atomic<int> commErrCode_;
     volatile uint64_t packetId_ = 0; // used for assignment to reSendMap_.ReSendInfo.packetId in 103 version or above
     volatile bool syncTaskRetryStatus_;

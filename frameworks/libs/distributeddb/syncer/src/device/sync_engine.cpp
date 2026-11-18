@@ -774,16 +774,16 @@ std::string SyncEngine::GetLabel() const
 
 bool SyncEngine::GetSyncRetry() const
 {
-    return isSyncRetry_;
+    return isSyncRetry_.load(std::memory_order_acquire);
 }
 
 void SyncEngine::SetSyncRetry(bool isRetry)
 {
-    if (isSyncRetry_ == isRetry) {
+    if (GetSyncRetry() == isRetry) {
         LOGI("sync retry is equal, syncTry=%d, no need to set.", isRetry);
         return;
     }
-    isSyncRetry_ = isRetry;
+    isSyncRetry_.store(isRetry, std::memory_order_release);
     LOGI("[SyncEngine] SetSyncRetry:%d ok", isRetry);
     std::lock_guard<std::mutex> lock(contextMapLock_);
     for (auto &iter : syncTaskContextMap_) {

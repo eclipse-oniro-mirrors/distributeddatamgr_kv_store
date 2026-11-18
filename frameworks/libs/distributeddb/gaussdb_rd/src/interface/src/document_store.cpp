@@ -221,7 +221,7 @@ int DocumentStore::UpdateDataIntoDB(std::shared_ptr<QueryContext> &context, Json
     std::string valStr;
     auto coll = Collection(context->collectionName, executor_);
     ResultSet resultSet;
-    errCode = InitResultSet(context, this, resultSet, false);
+    errCode = InitResultSet(shared_from_this(), context, resultSet, false);
     if (errCode != E_OK) {
         goto END;
     }
@@ -396,7 +396,7 @@ int DocumentStore::UpsertDataIntoDB(std::shared_ptr<QueryContext> &context, Json
     ResultSet resultSet;
     std::string newDocument;
     bool isDataExist = false;
-    errCode = InitResultSet(context, this, resultSet, false);
+    errCode = InitResultSet(shared_from_this(), context, resultSet, false);
     if (errCode != E_OK) {
         goto END;
     }
@@ -572,7 +572,7 @@ int DocumentStore::DeleteDataFromDB(std::shared_ptr<QueryContext> &context, Json
     }
     std::string id;
     ResultSet resultSet;
-    errCode = InitResultSet(context, this, resultSet, false);
+    errCode = InitResultSet(shared_from_this(), context, resultSet, false);
     if (errCode != E_OK) {
         goto END;
     }
@@ -785,7 +785,7 @@ int DocumentStore::InitFindResultSet(GRD_ResultSet *grdResultSet, std::shared_pt
     if (errCode != E_OK) {
         goto END;
     }
-    errCode = InitResultSet(context, this, grdResultSet->resultSet_, true);
+    errCode = InitResultSet(shared_from_this(), context, grdResultSet->resultSet_, true);
     if (errCode == E_OK) {
         collections_[context->collectionName] = nullptr;
     }
