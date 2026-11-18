@@ -386,6 +386,33 @@ int RdSingleVerStorageExecutor::GetPageSize(int &pageSize) const
     return E_OK;
 }
 
+int RdSingleVerStorageExecutor::SetShrinkEnable(bool enable) const
+{
+    if (db_ == nullptr) {
+        return -E_INVALID_DB;
+    }
+    int errCode = TransferGrdErrno(GRD_KVSetDbShrinkEnable(db_, enable));
+    if (errCode != E_OK) {
+        LOGE("[RdSingleVerStorageExecutor] Set shrink enable failed, errCode = [%d]", errCode);
+    }
+    return errCode;
+}
+
+int RdSingleVerStorageExecutor::GetShrinkEnable(bool &enable) const
+{
+    if (db_ == nullptr) {
+        return -E_INVALID_DB;
+    }
+    bool actual = false;
+    int errCode = TransferGrdErrno(GRD_KVGetDbShrinkEnable(db_, &actual));
+    if (errCode != E_OK) {
+        LOGE("[RdSingleVerStorageExecutor] Get shrink enable failed, errCode = [%d]", errCode);
+        return errCode;
+    }
+    enable = actual;
+    return E_OK;
+}
+
 int RdSingleVerStorageExecutor::SaveKvData(SingleVerDataType type, const Key &key, const Value &value)
 {
     std::string collectionName;

@@ -193,10 +193,12 @@ int RdSingleVerNaturalStoreConnection::Pragma(int cmd, void *parameter)
             return ForceCheckPoint();
         case PRAGMA_GET_PAGE_SIZE:
             return GetPageSize(parameter);
+        case PRAGMA_SHRINK:
+            return ProcessShrink(parameter);
         default:
             break;
     }
-    LOGD("Rd Pragma only support check point and get page size for now:%d", cmd);
+    LOGD("Rd Pragma only support check point, get page size and shrink switch for now:%d", cmd);
     return -E_NOT_SUPPORT;
 }
 
@@ -248,6 +250,31 @@ int RdSingleVerNaturalStoreConnection::GetPageSize(void *parameter) const
         *static_cast<int *>(parameter) = pageSize;
     }
 
+    ReleaseExecutor(handle);
+    return errCode;
+}
+
+int RdSingleVerNaturalStoreConnection::ProcessShrink(void *parameter) const
+{
+    if (parameter == nullptr) {
+        return -E_INVALID_ARGS;
+    }
+    auto *shrinkParam = static_cast<ShrinkParam *>(parameter);
+    if (shrinkParam->operation != ShrinkOperation::SET && shrinkParam->operation != ShrinkOperation::GET) {
+        return -E_INVALID_ARGS;
+    }
+
+    int errCode = E_OK;
+    RdSingleVerStorageExecutor *handle = GetExecutor(false, errCode);
+    if (handle == nullptr) {
+        LOGE("[RdSingleVerConnection]::[ProcessShrink] Get executor failed, errCode = [%d]", errCode);
+        return errCode;
+    }
+    if (shrinkParam->operation == ShrinkOperation::SET) {
+        errCode = handle->SetShrinkEnable(shrinkParam->enable);
+    } else {
+        errCode = handle->GetShrinkEnable(shrinkParam->enable);
+    }
     ReleaseExecutor(handle);
     return errCode;
 }

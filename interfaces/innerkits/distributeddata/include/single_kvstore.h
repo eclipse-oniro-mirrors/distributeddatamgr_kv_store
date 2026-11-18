@@ -390,6 +390,32 @@ public:
     {
         return Status::NOT_SUPPORT;
     }
+
+    /**
+     * @brief Request to enable or disable GaussDB automatic space reclamation.
+     *
+     * Only KvStoreType::LOCAL_ONLY backed by GaussDB RD supports enabling. SUCCESS means
+     * that the asynchronous switch request was accepted, not that the switch is already
+     * effective. The internal Get interface is used for tests/diagnostics only; callers
+     * must not use it as an effective-state contract.
+     *
+     * Disabling prevents subsequent switch delivery and automatic reclamation; an engine
+     * call or a reclamation that has already started may complete. The switch is not
+     * persisted and a really reopened database instance starts disabled.
+     *
+     * For an unsupported store type, enable returns NOT_SUPPORT and disable is a SUCCESS
+     * no-op without accessing the engine. A closed store returns ALREADY_CLOSED before the
+     * support check. The default implementation below has no shrink capability and
+     * returns NOT_SUPPORT.
+     *
+     * @param enable True to request enable, false to request disable.
+     * @return SUCCESS if accepted, ALREADY_CLOSED if closed, or NOT_SUPPORT if enable is
+     *         unsupported.
+     */
+    virtual Status SetShrinkEnable(bool enable)
+    {
+        return Status::NOT_SUPPORT;
+    }
 };
 }  // namespace DistributedKv
 }  // namespace OHOS

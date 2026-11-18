@@ -35,6 +35,16 @@ namespace OHOS::DistributedKv {
 using namespace OHOS::DistributedDataDfx;
 using namespace std::chrono;
 using namespace DATABASE_UTILS;
+
+namespace {
+// One thread serializes the asynchronous switch requests of every store wrapper.
+ExecutorPool &GetShrinkExecutorPool()
+{
+    static ExecutorPool pool(1, 1, "KVDB_Shrink");
+    return pool;
+}
+} // namespace
+
 SingleStoreImpl::SingleStoreImpl(
     std::shared_ptr<DBStore> dbStore, const AppId &appId, const Options &options, const Convertor &cvt)
     : convertor_(cvt), dbStore_(std::move(dbStore))
@@ -47,7 +57,7 @@ SingleStoreImpl::SingleStoreImpl(
     cloudAutoSync_ = options.cloudConfig.autoSync;
     isClientSync_ = options.isClientSync;
     syncObserver_ = std::make_shared<SyncObserver>();
-    roleType_ = options.role;
+    kvStoreType_ = options.kvStoreType;
     dataType_ = options.dataType;
     encrypt_ = options.encrypt;
     securityLevel_ = options.securityLevel;
@@ -787,6 +797,8 @@ int32_t SingleStoreImpl::Close(bool isForce)
         return false;
     });
     observers_.Clear();
+    // Invalidate queued tasks before releasing the delegate; active tasks hold a shared lock.
+    shrinkManager_.Invalidate();
     dbStore_ = nullptr;
     return ref_;
 }
@@ -899,6 +911,71 @@ Status SingleStoreImpl::Rekey()
 
     ZLOGI("Rekey completed successfully for store:%{public}s", StoreUtil::Anonymous(storeId_).c_str());
     return SUCCESS;
+}
+
+Status SingleStoreImpl::SetShrinkEnable(bool enable)
+{
+    DdsTrace trace(std::string(LOG_TAG "::") + std::string(__FUNCTION__));
+    std::shared_lock<decltype(rwMutex_)> lock(rwMutex_);
+    if (dbStore_ == nullptr) {
+        ZLOGE("db:%{public}s already closed!", StoreUtil::Anonymous(storeId_).c_str());
+        return ALREADY_CLOSED;
+    }
+    if (kvStoreType_ != KvStoreType::LOCAL_ONLY) {
+        if (!enable) {
+            // An unsupported store has no shrink task to cancel; disable stays an idempotent no-op.
+            return SUCCESS;
+        }
+        ZLOGI("shrink is not supported, type:%{public}d store:%{public}s",
+            static_cast<int32_t>(kvStoreType_), StoreUtil::Anonymous(storeId_).c_str());
+        return NOT_SUPPORT;
+    }
+    if (shrinkManager_.SetDesired(enable)) {
+        ScheduleShrink(enable);
+    }
+    ZLOGI("shrink switch accepted, enable:%{public}d store:%{public}s", enable,
+        StoreUtil::Anonymous(storeId_).c_str());
+    return SUCCESS;
+}
+
+Status SingleStoreImpl::ScheduleShrink(bool enable)
+{
+    auto weakSelf = weak_from_this();
+    auto task = [weakSelf, enable]() {
+        auto self = weakSelf.lock();
+        if (self != nullptr) {
+            self->RunShrink(enable);
+        }
+    };
+    auto taskId = GetShrinkExecutorPool().Execute(std::move(task));
+    if (taskId == ExecutorPool::INVALID_TASK_ID) {
+        // The static shrink pool only stops while the process is exiting; keep best-effort semantics.
+        ZLOGE("schedule shrink switch failed, store:%{public}s", StoreUtil::Anonymous(storeId_).c_str());
+    }
+    return SUCCESS;
+}
+
+void SingleStoreImpl::RunShrink(bool enable)
+{
+    // The delegate must stay alive through the desired-state check and the engine call.
+    std::shared_lock<decltype(rwMutex_)> lock(rwMutex_);
+    if (dbStore_ == nullptr || !shrinkManager_.TryBegin(enable)) {
+        return;
+    }
+    DistributedDB::ShrinkParam param;
+    param.operation = DistributedDB::ShrinkOperation::SET;
+    param.enable = enable;
+    DistributedDB::PragmaData data = &param;
+    auto status = StoreUtil::ConvertStatus(dbStore_->Pragma(DistributedDB::SHRINK, data));
+    if (status != SUCCESS) {
+        ReportDBFaultEvent(status, "RunShrink");
+        ZLOGE("shrink switch failed, enable:%{public}d status:0x%{public}x store:%{public}s", enable,
+            static_cast<uint32_t>(status), StoreUtil::Anonymous(storeId_).c_str());
+    } else {
+        ZLOGI("shrink switch applied, enable:%{public}d store:%{public}s", enable,
+            StoreUtil::Anonymous(storeId_).c_str());
+    }
+    shrinkManager_.Finish();
 }
 
 std::shared_ptr<ObserverBridge> SingleStoreImpl::PutIn(uint32_t &realType, std::shared_ptr<Observer> observer)

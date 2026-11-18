@@ -80,6 +80,7 @@ ohos_source_set("distributeddatafwk_src_file") {
     "../../kvdb/src/process_communication_impl.cpp",
     "../../kvdb/src/process_system_api_adapter_impl.cpp",
     "../../kvdb/src/security_manager.cpp",
+    "../../kvdb/src/shrink_manager.cpp",
     "../../kvdb/src/single_store_impl.cpp",
     "../../kvdb/src/store_factory.cpp",
     "../../kvdb/src/store_manager.cpp",

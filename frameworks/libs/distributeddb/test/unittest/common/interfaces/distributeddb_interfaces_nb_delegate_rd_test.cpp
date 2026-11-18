@@ -20,6 +20,8 @@
 #include "db_errno.h"
 #include "distributeddb_data_generate_unit_test.h"
 #include "distributeddb_tools_unit_test.h"
+#include "grd_api_manager.h"
+#include "grd_base/grd_error.h"
 #include "log_print.h"
 #include "platform_specific.h"
 #include "process_system_api_adapter_impl.h"
@@ -33,6 +35,31 @@ using namespace DistributedDBUnitTest;
 using namespace std;
 
 namespace {
+    int g_shrinkSetCalls = 0;
+    int g_shrinkGetCalls = 0;
+    bool g_shrinkSetValue = false;
+    bool g_shrinkGetValue = false;
+    int32_t g_shrinkSetResult = GRD_OK;
+    int32_t g_shrinkGetResult = GRD_OK;
+
+    int32_t FakeKVSetDbShrinkEnable(GRD_DB *db, bool enable)
+    {
+        (void)db;
+        g_shrinkSetValue = enable;
+        g_shrinkSetCalls++;
+        return g_shrinkSetResult;
+    }
+
+    int32_t FakeKVGetDbShrinkEnable(GRD_DB *db, bool *enable)
+    {
+        (void)db;
+        g_shrinkGetCalls++;
+        if (g_shrinkGetResult == GRD_OK && enable != nullptr) {
+            *enable = g_shrinkGetValue;
+        }
+        return g_shrinkGetResult;
+    }
+
     // define some variables to init a KvStoreDelegateManager object.
     KvStoreDelegateManager g_mgr(APP_ID, USER_ID);
     string g_testDir;
@@ -269,6 +296,54 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, GetPageSize002, TestSize.Level
     EXPECT_GT(pageSizeSecond, 0);
     EXPECT_EQ(pageSizeFirst, pageSizeSecond);
 
+    EXPECT_EQ(g_mgr.CloseKvStore(g_kvNbDelegatePtr), OK);
+    EXPECT_EQ(g_mgr.DeleteKvStore(storeId), OK);
+    g_kvNbDelegatePtr = nullptr;
+}
+
+HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, ShrinkSetGet001, TestSize.Level1)
+{
+    const std::string storeId = "distributed_nb_delegate_shrink_001";
+    g_mgr.GetKvStore(storeId, g_option, g_kvNbDelegateCallback);
+    ASSERT_TRUE(g_kvNbDelegatePtr != nullptr);
+    ASSERT_EQ(g_kvDelegateStatus, OK);
+
+    DocumentDB::GRD_APIInfo *apiInfo = DocumentDB::GetApiInfo();
+    auto originalSet = apiInfo->KVSetDbShrinkEnableApi;
+    auto originalGet = apiInfo->KVGetDbShrinkEnableApi;
+    apiInfo->KVSetDbShrinkEnableApi = FakeKVSetDbShrinkEnable;
+    apiInfo->KVGetDbShrinkEnableApi = FakeKVGetDbShrinkEnable;
+    g_shrinkSetCalls = 0;
+    g_shrinkGetCalls = 0;
+
+    ShrinkParam setParam;
+    setParam.operation = ShrinkOperation::SET;
+    setParam.enable = true;
+    PragmaData setData = static_cast<PragmaData>(&setParam);
+    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SHRINK, setData), OK);
+    EXPECT_EQ(g_shrinkSetCalls, 1);
+    EXPECT_TRUE(g_shrinkSetValue);
+    EXPECT_EQ(g_shrinkGetCalls, 0);
+
+    g_shrinkGetValue = true;
+    ShrinkParam getParam;
+    getParam.operation = ShrinkOperation::GET;
+    getParam.enable = false;
+    PragmaData getData = static_cast<PragmaData>(&getParam);
+    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SHRINK, getData), OK);
+    EXPECT_EQ(g_shrinkGetCalls, 1);
+    EXPECT_TRUE(getParam.enable);
+
+    // A null parameter and an unknown operation are rejected by the RD connection.
+    PragmaData nullData = nullptr;
+    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SHRINK, nullData), INVALID_ARGS);
+    ShrinkParam invalidParam;
+    invalidParam.operation = static_cast<ShrinkOperation>(100);
+    PragmaData invalidData = static_cast<PragmaData>(&invalidParam);
+    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SHRINK, invalidData), INVALID_ARGS);
+
+    apiInfo->KVSetDbShrinkEnableApi = originalSet;
+    apiInfo->KVGetDbShrinkEnableApi = originalGet;
     EXPECT_EQ(g_mgr.CloseKvStore(g_kvNbDelegatePtr), OK);
     EXPECT_EQ(g_mgr.DeleteKvStore(storeId), OK);
     g_kvNbDelegatePtr = nullptr;

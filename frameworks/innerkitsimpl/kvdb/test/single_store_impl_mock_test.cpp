@@ -12,8 +12,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <sys/types.h>
+#include <thread>
 #include <unistd.h>
 
 #include <gmock/gmock.h>
@@ -26,6 +31,7 @@
 #include "include/kvdb_service_client_mock.h"
 #include "include/observer_bridge_mock.h"
 #include "include/task_executor_mock.h"
+#include "kv_store_nb_delegate.h"
 #include "kvstore_observer.h"
 #include "single_store_impl.h"
 #include "store_factory.h"
@@ -38,6 +44,188 @@ using namespace DistributedDB;
 
 static StoreId storeId = { "single_test" };
 static AppId appId = { "rekey" };
+
+namespace {
+constexpr int WAIT_POLL_INTERVAL_MS = 10;
+} // namespace
+
+// Scriptable delegate that records the asynchronous SET switch calls of one store. The GET branch
+// is kept only for test/diagnostic scripting; the store wrapper never verifies the switch with a
+// read-back.
+// The DistributedDB byte types must be qualified explicitly here: the enclosing
+// OHOS::DistributedKv namespace also defines Key/Value/Entry/Query/KvStoreResultSet,
+// and the unqualified names would resolve to those blob types and hide the virtuals.
+class ShrinkMockDelegate : public DistributedDB::KvStoreNbDelegate {
+public:
+    using DBKey = DistributedDB::Key;
+    using DBValue = DistributedDB::Value;
+    using DBEntry = DistributedDB::Entry;
+    using DBQuery = DistributedDB::Query;
+    using DBResultSet = DistributedDB::KvStoreResultSet;
+    using DBStatus = DistributedDB::DBStatus;
+
+    DBStatus Pragma(PragmaCmd cmd, PragmaData &paramData) override
+    {
+        if (cmd != SHRINK) {
+            return DBStatus::NOT_SUPPORT;
+        }
+        auto param = static_cast<ShrinkParam *>(paramData);
+        if (param == nullptr) {
+            return DBStatus::INVALID_ARGS;
+        }
+        if (param->operation == ShrinkOperation::SET) {
+            return HandleSet(param->enable);
+        }
+        if (param->operation == ShrinkOperation::GET) {
+            return HandleGet(param->enable);
+        }
+        return DBStatus::INVALID_ARGS;
+    }
+
+    DBStatus Get(const DBKey &, DBValue &) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetEntries(const DBKey &, std::vector<DBEntry> &) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetEntries(const DBKey &, DBResultSet *&) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetEntries(const DBQuery &, std::vector<DBEntry> &) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetEntries(const DBQuery &, DBResultSet *&) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetCount(const DBQuery &, int &) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus CloseResultSet(DBResultSet *&) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus Put(const DBKey &, const DBValue &) override { return DBStatus::OK; }
+    DBStatus PutBatch(const std::vector<DBEntry> &) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus DeleteBatch(const std::vector<DBKey> &) override { return DBStatus::OK; }
+    DBStatus Delete(const DBKey &) override { return DBStatus::OK; }
+    DBStatus GetLocal(const DBKey &, DBValue &) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetLocalEntries(const DBKey &, std::vector<DBEntry> &) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus PutLocal(const DBKey &, const DBValue &) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus DeleteLocal(const DBKey &) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus PublishLocal(const DBKey &, bool, bool, const DistributedDB::KvStoreNbPublishOnConflict &) override
+    {
+        return DBStatus::NOT_SUPPORT;
+    }
+    DBStatus UnpublishToLocal(const DBKey &, bool, bool) override { return DBStatus::NOT_SUPPORT; }
+    std::string GetStoreId() const override { return "shrink_mock"; }
+    DBStatus SetConflictNotifier(int, const DistributedDB::KvStoreNbConflictNotifier &) override
+    {
+        return DBStatus::OK;
+    }
+    DBStatus Rekey(const DistributedDB::CipherPassword &) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus Export(const std::string &, const DistributedDB::CipherPassword &, bool) override
+    {
+        return DBStatus::NOT_SUPPORT;
+    }
+    DBStatus Import(const std::string &, const DistributedDB::CipherPassword &, bool) override
+    {
+        return DBStatus::NOT_SUPPORT;
+    }
+    DBStatus StartTransaction() override { return DBStatus::NOT_SUPPORT; }
+    DBStatus Commit() override { return DBStatus::NOT_SUPPORT; }
+    DBStatus Rollback() override { return DBStatus::NOT_SUPPORT; }
+    DBStatus PutLocalBatch(const std::vector<DBEntry> &) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus DeleteLocalBatch(const std::vector<DBKey> &) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetSecurityOption(DistributedDB::SecurityOption &) const override { return DBStatus::OK; }
+    DBStatus CheckIntegrity() const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetKeys(const DBKey &, std::vector<DBKey> &) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus UpdateKey(const DistributedDB::UpdateKeyCallback &) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetDeviceEntries(const std::string &, std::vector<DBEntry> &) const override
+    {
+        return DBStatus::NOT_SUPPORT;
+    }
+
+    void SetSetFailures(int failures)
+    {
+        setFailures_.store(failures);
+    }
+
+    // Blocks the next SET call inside the delegate so a test can deterministically observe the
+    // window in which the manager still has a task scheduled for the same desired value.
+    void BlockSet()
+    {
+        std::lock_guard<std::mutex> lock(setGateMutex_);
+        blockSet_ = true;
+    }
+
+    void ReleaseSet()
+    {
+        {
+            std::lock_guard<std::mutex> lock(setGateMutex_);
+            blockSet_ = false;
+        }
+        setGateCondition_.notify_all();
+    }
+
+    bool WaitActual(bool expected, std::chrono::milliseconds timeout = std::chrono::seconds(5))
+    {
+        auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (actual_.load() == expected) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_POLL_INTERVAL_MS));
+        }
+        return actual_.load() == expected;
+    }
+
+    bool WaitSetCalls(int expected, std::chrono::milliseconds timeout = std::chrono::seconds(5))
+    {
+        auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (setCalls_.load() >= expected) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_POLL_INTERVAL_MS));
+        }
+        return setCalls_.load() >= expected;
+    }
+
+    std::atomic<int> setCalls_ { 0 };
+    std::atomic<int> getCalls_ { 0 };
+    std::atomic<bool> actual_ { false };
+
+private:
+    DBStatus HandleSet(bool enable)
+    {
+        setCalls_++;
+        WaitSetGate();
+        if (setFailures_.load() > 0) {
+            setFailures_--;
+            // A failed engine SET; the store wrapper logs/DFX-reports it and never schedules again.
+            return DBStatus::BUSY;
+        }
+        actual_.store(enable);
+        return DBStatus::OK;
+    }
+
+    void WaitSetGate()
+    {
+        std::unique_lock<std::mutex> lock(setGateMutex_);
+        setGateCondition_.wait(lock, [this] { return !blockSet_; });
+    }
+
+    DBStatus HandleGet(bool &enable)
+    {
+        getCalls_++;
+        enable = actual_.load();
+        return DBStatus::OK;
+    }
+
+    std::atomic<int> setFailures_ { 0 };
+    std::mutex setGateMutex_;
+    std::condition_variable setGateCondition_;
+    bool blockSet_ = false;
+};
+
+std::shared_ptr<SingleStoreImpl> CreateShrinkStore(const std::shared_ptr<ShrinkMockDelegate> &delegate,
+    Convertor &convertor, KvStoreType type = KvStoreType::LOCAL_ONLY)
+{
+    Options options;
+    options.kvStoreType = type;
+    options.securityLevel = S2;
+    options.area = EL1;
+    options.baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
+    options.backup = false;
+    options.syncable = false;
+    AppId appId = { "SingleStoreImplTest" };
+    return std::make_shared<SingleStoreImpl>(delegate, appId, options, convertor);
+}
 
 class SingleStoreImplMockTest : public testing::Test {
 public:
@@ -1435,5 +1623,86 @@ HWTEST_F(SingleStoreImplMockTest, SetDbConfigReturnsErrorWhenPragmaFails, testin
         GTEST_LOG_(INFO) << "SingleStoreImplMockTest-an exception occurred by SetDbConfigReturnsErrorWhenPragmaFails";
     }
     GTEST_LOG_(INFO) << "SingleStoreImplMockTest-end SetDbConfigReturnsErrorWhenPragmaFails";
+}
+
+/**
+ * @tc.name: SetShrinkEnableAsyncSetOnly
+ * @tc.desc: SetShrinkEnable records the request and the background task issues exactly one SET per
+ *           request; SUCCESS only means the asynchronous request was accepted.
+ * @tc.type: FUNC
+ */
+HWTEST_F(SingleStoreImplMockTest, SetShrinkEnableAsyncSetOnly, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    ASSERT_TRUE(delegate->WaitActual(true));
+    EXPECT_EQ(delegate->setCalls_.load(), 1);
+    EXPECT_EQ(delegate->getCalls_.load(), 0);
+
+    ASSERT_EQ(store->SetShrinkEnable(false), SUCCESS);
+    ASSERT_TRUE(delegate->WaitActual(false));
+    EXPECT_EQ(delegate->setCalls_.load(), 2);
+    EXPECT_EQ(delegate->getCalls_.load(), 0);
+    EXPECT_EQ(store->Close(true), 0);
+}
+
+/**
+ * @tc.name: SetShrinkEnableSameDesiredNotEnqueuedTwice
+ * @tc.desc: A repeated request for the same value while the manager still has that value scheduled
+ *           returns SUCCESS without enqueueing another task.
+ * @tc.type: FUNC
+ */
+HWTEST_F(SingleStoreImplMockTest, SetShrinkEnableSameDesiredNotEnqueuedTwice, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    delegate->BlockSet();
+
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    // The first task is inside the engine SET call, so the same desired value stays scheduled.
+    ASSERT_TRUE(delegate->WaitSetCalls(1));
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    delegate->ReleaseSet();
+
+    ASSERT_TRUE(delegate->WaitActual(true));
+    EXPECT_EQ(delegate->setCalls_.load(), 1);
+    EXPECT_EQ(delegate->getCalls_.load(), 0);
+    EXPECT_EQ(store->Close(true), 0);
+}
+
+/**
+ * @tc.name: ShrinkFailureDoesNotRetry
+ * @tc.desc: A failed SET is reported through logs/DFX only and never retried; after the task releases
+ *           the manager state, a later identical request is scheduled again.
+ * @tc.type: FUNC
+ */
+HWTEST_F(SingleStoreImplMockTest, ShrinkFailureDoesNotRetry, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    delegate->SetSetFailures(10);
+
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    ASSERT_TRUE(delegate->WaitSetCalls(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_EQ(delegate->setCalls_.load(), 1);
+    EXPECT_EQ(delegate->getCalls_.load(), 0);
+    EXPECT_FALSE(delegate->actual_.load());
+
+    // The failure released the scheduled state, so the next identical request can be scheduled
+    // again.
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    ASSERT_TRUE(delegate->WaitSetCalls(2));
+    EXPECT_EQ(delegate->getCalls_.load(), 0);
+    EXPECT_FALSE(delegate->actual_.load());
+    EXPECT_EQ(store->Close(true), 0);
 }
 } // namespace OHOS::DistributedKv
