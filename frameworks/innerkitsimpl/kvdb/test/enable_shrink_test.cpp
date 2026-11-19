@@ -974,8 +974,6 @@ struct ReaderContext {
     std::vector<Key> liveCheckKeys;
     Key stableKey;
     std::string stableValue;
-    Key survivePrefix;
-    Key reclaimPrefix;
     std::string storeId;
 
     void Init(const std::string &storeIdParam, const std::vector<Entry> &surviveEntries,
@@ -985,8 +983,6 @@ struct ReaderContext {
         reclaimSamples.assign(CONCURRENT_READERS, {});
         readFailures.assign(CONCURRENT_READERS, 0);
         storeId = storeIdParam;
-        survivePrefix = CONCURRENT_SURVIVE_PREFIX;
-        reclaimPrefix = CONCURRENT_RECLAIM_PREFIX;
         for (const auto &entry : surviveEntries) {
             surviveValues[entry.key.ToString()] = entry.value.ToString();
         }
