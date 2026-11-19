@@ -231,8 +231,6 @@ HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableClosed, TestSize.Level1)
     ASSERT_EQ(StoreManager::GetInstance().Delete(appId, sqliteId, BASE_DIR), SUCCESS);
 }
 
-
-
 HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableDisableBeforeTaskStarts, TestSize.Level1)
 {
     auto store = CreateStore("ToggleShrinkStore", KvStoreType::LOCAL_ONLY);

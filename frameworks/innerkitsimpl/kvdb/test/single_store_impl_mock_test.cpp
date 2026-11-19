@@ -50,6 +50,7 @@ static AppId appId = { "rekey" };
 namespace {
 constexpr int WAIT_POLL_INTERVAL_MS = 10;
 constexpr int SHRINK_WAIT_TIMEOUT_MS = 5000;
+constexpr int32_t MOCK_PAGE_SIZE = 4;
 
 struct ShrinkState {
     bool desired = true;
@@ -67,16 +68,15 @@ bool WaitShrinkState(const std::shared_ptr<SingleStoreImpl> &store, bool desired
     std::chrono::milliseconds timeout = std::chrono::milliseconds(SHRINK_WAIT_TIMEOUT_MS))
 {
     auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (true) {
+    while (std::chrono::steady_clock::now() < deadline) {
         auto state = GetShrinkState(store);
         if (state.desired == desired && state.pending == pending) {
             return true;
         }
-        if (std::chrono::steady_clock::now() >= deadline) {
-            return false;
-        }
         std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_POLL_INTERVAL_MS));
     }
+    auto state = GetShrinkState(store);
+    return state.desired == desired && state.pending == pending;
 }
 } // namespace
 
@@ -97,7 +97,7 @@ public:
             // remains usable by a future GetPageSize case.
             auto pageSize = static_cast<int32_t *>(paramData);
             if (pageSize != nullptr) {
-                *pageSize = 4;
+                *pageSize = MOCK_PAGE_SIZE;
             }
             pageSizeCalls_++;
             return DBStatus::OK;
