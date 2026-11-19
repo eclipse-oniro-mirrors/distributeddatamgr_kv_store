@@ -285,6 +285,29 @@ public:
     {
         return Status::NOT_SUPPORT;
     }
+    StoreId GetStoreId() const override { return StoreId(); }
+    Status Put(const Key &, const Value &) override { return Status::NOT_SUPPORT; }
+    Status PutBatch(const std::vector<Entry> &) override { return Status::NOT_SUPPORT; }
+    Status Delete(const Key &) override { return Status::NOT_SUPPORT; }
+    Status DeleteBatch(const std::vector<Key> &) override { return Status::NOT_SUPPORT; }
+    Status StartTransaction() override { return Status::NOT_SUPPORT; }
+    Status Commit() override { return Status::NOT_SUPPORT; }
+    Status Rollback() override { return Status::NOT_SUPPORT; }
+    Status SubscribeKvStore(SubscribeType, std::shared_ptr<KvStoreObserver>) override
+    {
+        return Status::NOT_SUPPORT;
+    }
+    Status UnSubscribeKvStore(SubscribeType, std::shared_ptr<KvStoreObserver>) override
+    {
+        return Status::NOT_SUPPORT;
+    }
+    Status Backup(const std::string &, const std::string &) override { return Status::NOT_SUPPORT; }
+    Status Restore(const std::string &, const std::string &) override { return Status::NOT_SUPPORT; }
+    Status DeleteBackup(const std::vector<std::string> &, const std::string &,
+        std::map<std::string, DistributedKv::Status> &) override
+    {
+        return Status::NOT_SUPPORT;
+    }
 };
 
 class SingleStoreImplMockTest : public testing::Test {
