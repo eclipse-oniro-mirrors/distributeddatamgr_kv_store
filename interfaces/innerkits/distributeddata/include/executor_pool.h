@@ -123,20 +123,6 @@ public:
         return res;
     }
 
-    // Removes a task only when it is still waiting in a queue and can no longer run. Returns true only
-    // if the task was actually removed from a waiting queue and is guaranteed not to execute; a running
-    // or already finished task returns false. Remove() cannot provide this guarantee because it samples
-    // Find() before the removal, so a task popped in between is still reported as removed. A caller that
-    // owns a per-task side effect (for example a pending counter) must roll it back only on true.
-    bool RemovePending(TaskId taskId)
-    {
-        bool removed = delayTasks_.Remove(taskId, false);
-        if (execs_ != nullptr) {
-            removed = execs_->Remove(taskId, false) || removed;
-        }
-        return removed;
-    }
-
     TaskId Reset(TaskId taskId, Duration interval)
     {
         auto updated = delayTasks_.Update(taskId, [interval](InnerTask &task) -> std::pair<bool, Time> {

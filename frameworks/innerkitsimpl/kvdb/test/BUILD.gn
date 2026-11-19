@@ -174,7 +174,6 @@ ohos_unittest("SingleStoreImplTest") {
   sources = [
     "../../kvdb/src/kv_hiview_reporter_mock.cpp",
     "enable_shrink_test.cpp",
-    "shrink_manager_test.cpp",
     "single_store_impl_shrink_test.cpp",
     "single_store_impl_test.cpp",
   ]

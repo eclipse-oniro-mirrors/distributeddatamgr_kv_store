@@ -56,10 +56,7 @@ enum : int {
     PRAGMA_REMOVE_LOCAL_DATA_BY_KEY_PATTERN,
     PRAGMA_SET_HIGH_PERFORMANCE_READ_MODE,
     PRAGMA_GET_PAGE_SIZE,
-    // Toggle/query the GaussDB automatic space reclamation state; parameter type is ShrinkParam*.
-    // SET is the only production path and only switches the runtime enable flag (it does not trigger
-    // a one-shot reclamation, which is decided by engine-internal thresholds). GET is used by
-    // tests/diagnostics to read the actual engine state and is not a production contract.
+    // Parameter type is ShrinkParam*; SET is production, GET is test/diagnostics only.
     PRAGMA_SHRINK,
 };
 

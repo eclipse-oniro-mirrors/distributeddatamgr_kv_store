@@ -137,27 +137,17 @@ enum PragmaCmd {
     REMOVE_LOCAL_DATA_BY_KEY_PATTERN,
     SET_HIGH_PERFORMANCE_READ_MODE,
     GET_PAGE_SIZE,
-    // Runtime switch of the GaussDB automatic space reclamation (RD engine only); the Pragma
-    // parameter type is ShrinkParam*. SET is the only production path and only switches the runtime
-    // enable flag (it does not trigger a one-shot reclamation, which is decided by engine-internal
-    // thresholds). GET is used by tests/diagnostics to read the actual engine state and is not a
-    // production contract.
+    // SET is the production path; GET is test/diagnostics only. Pragma parameter type is ShrinkParam*.
     SHRINK,
 };
 
-// Operation of the SHRINK Pragma: SET is the only production path; GET is test/diagnostics only.
 enum class ShrinkOperation : uint32_t {
     SET = 0,
     GET = 1,
 };
 
-// Parameter of the SHRINK Pragma (PragmaData points to a ShrinkParam). SET only toggles the runtime
-// shrink switch and does not trigger a one-shot reclamation (reclaim is decided by engine-internal
-// thresholds). GET reads the actual engine state for tests/diagnostics only and must not be treated
-// as a production verification contract.
 struct ShrinkParam {
     ShrinkOperation operation = ShrinkOperation::SET;
-    // Expected state for SET (production only) / actual state written back by GET on success.
     bool enable = false;
 };
 

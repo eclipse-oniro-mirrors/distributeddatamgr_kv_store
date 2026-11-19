@@ -712,18 +712,15 @@ void CheckShrinkSetGetPassThrough()
 void CheckShrinkErrorConversion()
 {
     ShrinkParam param;
-    // A failed Get must keep the caller value untouched.
     g_shrinkGetResult = GRD_RESOURCE_BUSY;
     param.operation = ShrinkOperation::GET;
     param.enable = true;
     EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, &param), -E_BUSY);
     EXPECT_TRUE(param.enable);
-    // Set errno conversion.
     g_shrinkSetResult = GRD_TIME_OUT;
     param.operation = ShrinkOperation::SET;
     param.enable = true;
     EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, &param), -E_TIMEOUT);
-    // Unknown operation is rejected without touching the engine.
     int setCallsBeforeInvalid = g_shrinkSetCalls;
     ShrinkParam invalidParam;
     invalidParam.operation = static_cast<ShrinkOperation>(INVALID_SHRINK_OPERATION);
@@ -744,6 +741,15 @@ HWTEST_F(DistributedDBStorageRdSingleVerNaturalExecutorTest, PragmaShrinkSetGet0
     CheckShrinkErrorConversion();
     apiInfo->KVSetDbShrinkEnableApi = originalSet;
     apiInfo->KVGetDbShrinkEnableApi = originalGet;
+}
+
+HWTEST_F(DistributedDBStorageRdSingleVerNaturalExecutorTest, PragmaShrinkNullExecutor, TestSize.Level1)
+{
+    RdSingleVerNaturalStoreConnection connection(nullptr);
+    ShrinkParam param;
+    param.operation = ShrinkOperation::SET;
+    param.enable = true;
+    EXPECT_EQ(connection.Pragma(PRAGMA_SHRINK, &param), -E_NOT_INIT);
 }
 
 namespace {

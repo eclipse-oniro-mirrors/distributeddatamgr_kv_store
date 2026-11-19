@@ -334,7 +334,6 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, ShrinkSetGet001, TestSize.Leve
     EXPECT_EQ(g_shrinkGetCalls, 1);
     EXPECT_TRUE(getParam.enable);
 
-    // A null parameter and an unknown operation are rejected by the RD connection.
     PragmaData nullData = nullptr;
     EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SHRINK, nullData), INVALID_ARGS);
     ShrinkParam invalidParam;

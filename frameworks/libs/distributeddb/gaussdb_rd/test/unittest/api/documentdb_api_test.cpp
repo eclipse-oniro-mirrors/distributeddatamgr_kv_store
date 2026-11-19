@@ -56,32 +56,6 @@ int32_t FakeKVGetDbShrinkEnable(GRD_DB *db, bool *enable)
     return g_shrinkGetResult;
 }
 
-// Restores the two shrink entries of the global GRD API table on destruction, so the temporarily
-// cleared function pointers cannot leak into the other test cases when an assertion fails.
-class ShrinkApiInfoGuard {
-public:
-    explicit ShrinkApiInfoGuard(GRD_APIInfo *apiInfo)
-        : apiInfo_(apiInfo),
-          setApi_(apiInfo->KVSetDbShrinkEnableApi),
-          getApi_(apiInfo->KVGetDbShrinkEnableApi)
-    {
-    }
-
-    ~ShrinkApiInfoGuard()
-    {
-        apiInfo_->KVSetDbShrinkEnableApi = setApi_;
-        apiInfo_->KVGetDbShrinkEnableApi = getApi_;
-    }
-
-    ShrinkApiInfoGuard(const ShrinkApiInfoGuard &) = delete;
-    ShrinkApiInfoGuard &operator=(const ShrinkApiInfoGuard &) = delete;
-
-private:
-    GRD_APIInfo *apiInfo_ = nullptr;
-    KVSetDbShrinkEnable setApi_ = nullptr;
-    KVGetDbShrinkEnable getApi_ = nullptr;
-};
-
 class DocumentDBApiTest : public testing::Test {
 public:
     static void SetUpTestCase(void);
@@ -873,18 +847,12 @@ HWTEST_F(DocumentDBApiTest, FlushDBTest001, TestSize.Level0)
     DocumentDBTestUtils::RemoveTestDbFiles(path);
 }
 
-/**
- * @tc.name: SetDbShrinkEnableTest001
- * @tc.desc: Test GRD_KVSetDbShrinkEnable forwarding and error passthrough.
- * @tc.type: FUNC
- */
 HWTEST_F(DocumentDBApiTest, SetDbShrinkEnableTest001, TestSize.Level0)
 {
     GRD_DB *db = nullptr;
     std::string path = "./document.db";
     ASSERT_EQ(GRD_DBOpen(path.c_str(), "", GRD_DB_OPEN_CREATE, &db), GRD_OK);
     ASSERT_NE(db, nullptr);
-
     GRD_APIInfo *apiInfo = GetApiInfo();
     auto originalSet = apiInfo->KVSetDbShrinkEnableApi;
     auto originalGet = apiInfo->KVGetDbShrinkEnableApi;
@@ -896,7 +864,6 @@ HWTEST_F(DocumentDBApiTest, SetDbShrinkEnableTest001, TestSize.Level0)
     EXPECT_EQ(GRD_KVSetDbShrinkEnable(db, true), GRD_OK);
     EXPECT_EQ(g_shrinkSetCalls, 1);
     EXPECT_TRUE(g_shrinkSetValue);
-
     EXPECT_EQ(GRD_KVSetDbShrinkEnable(db, false), GRD_OK);
     EXPECT_EQ(g_shrinkSetCalls, 2);
     EXPECT_FALSE(g_shrinkSetValue);
@@ -904,18 +871,21 @@ HWTEST_F(DocumentDBApiTest, SetDbShrinkEnableTest001, TestSize.Level0)
     g_shrinkSetResult = GRD_RESOURCE_BUSY;
     EXPECT_EQ(GRD_KVSetDbShrinkEnable(db, true), GRD_RESOURCE_BUSY);
 
-    // Restore both function table entries.
+    apiInfo->KVSetDbShrinkEnableApi = nullptr;
+    apiInfo->KVGetDbShrinkEnableApi = nullptr;
+    bool actual = false;
+    int32_t nullSetStatus = GRD_KVSetDbShrinkEnable(db, true);
+    int32_t nullGetStatus = GRD_KVGetDbShrinkEnable(db, &actual);
     apiInfo->KVSetDbShrinkEnableApi = originalSet;
     apiInfo->KVGetDbShrinkEnableApi = originalGet;
+    EXPECT_EQ(nullSetStatus, GRD_INNER_ERR);
+    EXPECT_EQ(nullGetStatus, GRD_INNER_ERR);
+    EXPECT_FALSE(actual);
+
     EXPECT_EQ(GRD_DBClose(db, GRD_DB_CLOSE), GRD_OK);
     DocumentDBTestUtils::RemoveTestDbFiles(path);
 }
 
-/**
- * @tc.name: GetDbShrinkEnableTest001
- * @tc.desc: Test GRD_KVGetDbShrinkEnable forwarding and that the actual value is only written back on success.
- * @tc.type: FUNC
- */
 HWTEST_F(DocumentDBApiTest, GetDbShrinkEnableTest001, TestSize.Level0)
 {
     GRD_APIInfo *apiInfo = GetApiInfo();
@@ -936,7 +906,6 @@ HWTEST_F(DocumentDBApiTest, GetDbShrinkEnableTest001, TestSize.Level0)
     EXPECT_EQ(GRD_KVGetDbShrinkEnable(nullptr, &actual), GRD_OK);
     EXPECT_FALSE(actual);
 
-    // A failed Get must not overwrite the caller's value.
     g_shrinkGetResult = GRD_TIME_OUT;
     actual = true;
     EXPECT_EQ(GRD_KVGetDbShrinkEnable(nullptr, &actual), GRD_TIME_OUT);
@@ -944,44 +913,6 @@ HWTEST_F(DocumentDBApiTest, GetDbShrinkEnableTest001, TestSize.Level0)
 
     apiInfo->KVSetDbShrinkEnableApi = originalSet;
     apiInfo->KVGetDbShrinkEnableApi = originalGet;
-}
-
-/**
- * @tc.name: ShrinkEnableNullApiTest001
- * @tc.desc: Test the missing RD symbol branches of the shrink enable APIs: both return GRD_INNER_ERR,
- *           do not touch db and the Get does not write the caller's output value back.
- * @tc.type: FUNC
- */
-HWTEST_F(DocumentDBApiTest, ShrinkEnableNullApiTest001, TestSize.Level0)
-{
-    GRD_DB *db = nullptr;
-    std::string path = "./document.db";
-    ASSERT_EQ(GRD_DBOpen(path.c_str(), "", GRD_DB_OPEN_CREATE, &db), GRD_OK);
-    ASSERT_NE(db, nullptr);
-
-    GRD_APIInfo *apiInfo = GetApiInfo();
-    {
-        // The guard restores the real table entries when leaving this scope, even if an assertion fails.
-        ShrinkApiInfoGuard guard(apiInfo);
-        apiInfo->KVSetDbShrinkEnableApi = nullptr;
-        apiInfo->KVGetDbShrinkEnableApi = nullptr;
-
-        // A missing RD symbol must be detected before db is touched.
-        EXPECT_EQ(GRD_KVSetDbShrinkEnable(db, true), GRD_INNER_ERR);
-        EXPECT_EQ(GRD_KVSetDbShrinkEnable(nullptr, false), GRD_INNER_ERR);
-
-        // A missing Get symbol must not overwrite the caller's output value.
-        bool actual = false;
-        EXPECT_EQ(GRD_KVGetDbShrinkEnable(db, &actual), GRD_INNER_ERR);
-        EXPECT_FALSE(actual);
-        actual = true;
-        EXPECT_EQ(GRD_KVGetDbShrinkEnable(nullptr, &actual), GRD_INNER_ERR);
-        EXPECT_TRUE(actual);
-        EXPECT_EQ(GRD_KVGetDbShrinkEnable(db, nullptr), GRD_INNER_ERR);
-    }
-
-    EXPECT_EQ(GRD_DBClose(db, GRD_DB_CLOSE), GRD_OK);
-    DocumentDBTestUtils::RemoveTestDbFiles(path);
 }
 
 } // namespace

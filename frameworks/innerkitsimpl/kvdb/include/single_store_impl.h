@@ -82,9 +82,7 @@ public:
         std::map<std::string, DistributedKv::Status> &status) override;
     Status Rekey() override;
     Status SetShrinkEnable(bool enable) override;
-    // Internal: actual engine capability determined at open time (StoreFactory).
     void SetShrinkSupported(bool supported);
-    // Test/diagnostics only: snapshot of ShrinkManager state.
     void GetShrinkStateForTest(bool &desiredEnabled, uint32_t &pendingTasks) const;
     void OnRemoteDied() override;
     bool IsRebuild() override;
@@ -137,7 +135,6 @@ private:
     Status GetResultSet(const DBQuery &query, std::shared_ptr<ResultSet> &resultSet) const;
     Status GetEntries(const DBQuery &query, std::vector<Entry> &entries) const;
     Status RetryWithCheckPoint(std::function<DistributedDB::DBStatus()> lambda);
-    Status ScheduleShrink(bool enable);
     void RunShrink(bool enable);
     std::function<void(ObserverBridge *)> BridgeReleaser();
     Status DoSync(SyncInfo &syncInfo, std::shared_ptr<SyncCallback> observer);
@@ -161,7 +158,7 @@ private:
     std::string storeId_;
     int32_t ref_ = 1;
     int32_t dataType_ = DataType::TYPE_DYNAMICAL;
-    KvStoreType kvStoreType_ = KvStoreType::SINGLE_VERSION;
+    uint32_t roleType_ = 0;
     std::atomic<uint64_t> taskId_ = 0;
     bool isCheckIntegrity_ = false;
     bool isSchemaStore_ = false;
@@ -177,10 +174,6 @@ private:
     std::mutex notifyMutex_;
     uint64_t notifyExpiredTime_ = 0;
     std::shared_ptr<DBStore> dbStore_ = nullptr;
-    // Serializes the SetDesired()/ScheduleShrink() pair of this wrapper: task enqueue order must follow
-    // the desired-value order, otherwise two concurrent toggles could cancel the newest task.
-    std::mutex shrinkTaskMutex_;
-    std::atomic<ExecutorPool::TaskId> shrinkTaskId_{ ExecutorPool::INVALID_TASK_ID };
     bool shrinkSupported_ = false;
     ShrinkManager shrinkManager_;
     std::shared_ptr<SyncObserver> syncObserver_ = nullptr;

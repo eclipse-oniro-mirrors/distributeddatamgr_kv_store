@@ -54,11 +54,7 @@ GRD_API int32_t GRD_KVBatchDel(GRD_DB *db, const char *collectionName, GRD_KVBat
 
 GRD_API int32_t GRD_KVBatchDestroy(GRD_KVBatchT *batch);
 
-/*
- * Runtime switch of the GaussDB automatic space reclamation. The production path uses SET
- * only; Get is used by tests/diagnostics to read the actual value and only writes it back on
- * success. The real state is owned by the GRD_DB instance.
- */
+// Runtime switch of the GaussDB automatic space reclamation; GET is test/diagnostics only.
 GRD_API int32_t GRD_KVSetDbShrinkEnable(GRD_DB *db, bool enable);
 
 GRD_API int32_t GRD_KVGetDbShrinkEnable(GRD_DB *db, bool *enable);

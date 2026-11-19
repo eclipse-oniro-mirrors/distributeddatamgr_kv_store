@@ -19,16 +19,10 @@ namespace OHOS::DistributedKv {
 bool ShrinkManager::SetDesired(bool enable)
 {
     std::lock_guard<std::mutex> lock(stateMutex_);
-    bool changed = desiredEnabled_ != enable;
-    desiredEnabled_ = enable;
-    if (!changed && pendingTasks_ > 0) {
-        // A task that already carries this value is still pending: never queue a duplicate.
+    if (desiredEnabled_ == enable && pendingTasks_ > 0) {
         return false;
     }
-    // A changed value, or the same value with nothing pending, is queued once. The first disable of a
-    // store that was never enabled is therefore queued too: the SET(false) is idempotent and works as
-    // a safety sync that can heal an engine instance left enabled by an earlier wrapper lifetime.
-    // The extra SET(false) after open is accepted noise; P3-2 is no longer suppressed.
+    desiredEnabled_ = enable;
     ++pendingTasks_;
     return true;
 }
@@ -42,16 +36,7 @@ bool ShrinkManager::TryBegin(bool enable)
 void ShrinkManager::Finish()
 {
     std::lock_guard<std::mutex> lock(stateMutex_);
-    if (pendingTasks_ > 0) {
-        --pendingTasks_;
-    }
-}
-
-void ShrinkManager::Invalidate()
-{
-    std::lock_guard<std::mutex> lock(stateMutex_);
-    desiredEnabled_ = false;
-    pendingTasks_ = 0;
+    --pendingTasks_;
 }
 
 void ShrinkManager::GetState(bool &desiredEnabled, uint32_t &pendingTasks) const

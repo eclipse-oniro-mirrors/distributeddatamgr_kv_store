@@ -132,14 +132,6 @@ std::shared_ptr<SingleKvStore> StoreFactory::GetOrOpenStore(const AppId &appId, 
                 SetDbConfig(dbStore, options.walStartCheckpointSize);
                 const Convertor &convertor = *(convertors_[options.kvStoreType]);
                 kvStore = std::make_shared<SingleStoreImpl>(dbStore, appId, options, convertor);
-                if (options.kvStoreType == KvStoreType::LOCAL_ONLY) {
-                    // The delegate may silently fall back to SQLite when the GaussDB RD library is unavailable,
-                    // so probe the engine that was actually opened: RD supports GET_PAGE_SIZE, SQLite does not.
-                    int pageSize = 0;
-                    DistributedDB::PragmaData data = static_cast<DistributedDB::PragmaData>(&pageSize);
-                    auto pageSizeStatus = dbStore->Pragma(DistributedDB::GET_PAGE_SIZE, data);
-                    kvStore->SetShrinkSupported(pageSizeStatus == DistributedDB::DBStatus::OK);
-                }
             });
         status = StoreUtil::ConvertStatus(dbStatus);
         if (kvStore == nullptr) {

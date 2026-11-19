@@ -392,30 +392,12 @@ public:
     }
 
     /**
-     * @brief Request to enable or disable GaussDB automatic space reclamation.
-     *
-     * Only KvStoreType::LOCAL_ONLY backed by an engine that actually has the shrink
-     * capability (GaussDB RD) supports enabling. The implementation judges the capability
-     * that the engine reported when the store was opened, so a store whose engine silently
-     * fell back to SQLite also returns NOT_SUPPORT for enable. SUCCESS means that the
-     * asynchronous switch request was accepted, not that the switch is already effective.
-     * The internal Get interface is used for tests/diagnostics only; callers must not use
-     * it as an effective-state contract.
-     *
-     * Disabling prevents subsequent switch delivery and automatic reclamation; an engine
-     * call or a reclamation that has already started may complete. The switch is delivered
-     * by a background task while the store is alive; closing the store waits for an
-     * in-flight engine call (there is no in-repo hard upper bound on that wait). The switch
-     * is not persisted and a really reopened database instance starts disabled.
-     *
-     * For a store without shrink capability, enable returns NOT_SUPPORT and disable is a
-     * SUCCESS no-op without accessing the engine. A closed store returns ALREADY_CLOSED
-     * before the support check. The default implementation below has no shrink capability
-     * and returns NOT_SUPPORT (for both enable and disable); this semantics is unchanged.
-     *
+     * @brief Requests the asynchronous GaussDB RD shrink switch.
+     * SUCCESS only means the request was accepted. Only a LOCAL_ONLY store opened on the actual
+     * GaussDB RD engine supports enabling; other stores return NOT_SUPPORT for enable and SUCCESS
+     * for the idempotent disable. A closed store returns ALREADY_CLOSED before the support check.
      * @param enable True to request enable, false to request disable.
-     * @return SUCCESS if accepted, ALREADY_CLOSED if closed, or NOT_SUPPORT if enable is
-     *         unsupported.
+     * @return SUCCESS if accepted, ALREADY_CLOSED if closed, NOT_SUPPORT if enable is unsupported.
      */
     virtual Status SetShrinkEnable(bool enable)
     {
