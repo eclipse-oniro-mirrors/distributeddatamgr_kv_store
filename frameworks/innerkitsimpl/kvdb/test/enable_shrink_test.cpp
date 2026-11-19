@@ -23,6 +23,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -43,9 +44,13 @@ namespace {
 constexpr const char *BASE_DIR = "/data/service/el1/public/database/SingleStoreImplTest";
 constexpr const char *APP_ID = "SingleStoreImplTest";
 
+constexpr int32_t MAX_BATCH_ENTRIES = 128; // DBConstant::MAX_BATCH_SIZE in distributeddb
+constexpr uint64_t DISK_BLOCK_SIZE_BYTES = 512;
+
 constexpr int64_t WAIT_SWITCH_TIMEOUT_MS = 5000;
 
 constexpr int64_t WAIT_RECLAIM_TIMEOUT_MS = 15000;
+constexpr int64_t RECLAIM_SETTLE_TIMEOUT_MS = 60000;
 constexpr int64_t POLL_INTERVAL_MS = 200;
 constexpr int64_t SETTLE_INTERVAL_MS = 200;
 constexpr int64_t NO_DELETE_OBSERVE_MS = 3000;
@@ -53,25 +58,36 @@ constexpr int64_t MAX_ACCEPT_MILLIS = 1000;
 
 constexpr uint64_t HOUSEKEEPING_DROP_PERCENT = 25;
 
-constexpr int32_t RECLAIM_ROUNDS = 3;
-constexpr int32_t RECLAIM_KEYS_PER_ROUND = 256;
+constexpr int32_t RECLAIM_WRITE_BATCHES = 20;
+constexpr int32_t RECLAIM_KEYS_PER_BATCH = MAX_BATCH_ENTRIES;
 constexpr size_t RECLAIM_VALUE_SIZE = 8 * 1024;
-
-constexpr int32_t RECLAIM_BIG_ROUNDS = 5;
-constexpr int32_t RECLAIM_BIG_KEYS_PER_ROUND = 512;
-constexpr size_t RECLAIM_BIG_VALUE_SIZE = 8 * 1024;
-
+constexpr int32_t RECLAIM_TOTAL_KEYS = RECLAIM_WRITE_BATCHES * RECLAIM_KEYS_PER_BATCH;
+constexpr int32_t RECLAIM_PEAK_SCANS = 3;
 constexpr int64_t RECLAIM_MIN_DROP_PERCENT = 85;
+
+constexpr int32_t RECLAIM_KEYS_PER_ROUND = 256;
 
 constexpr int32_t PLAIN_KEYS = 512;
 constexpr size_t PLAIN_VALUE_SIZE = 4 * 1024;
 
 constexpr int32_t BELOW_THRESHOLD_DELETE_KEYS = 160;
 
-constexpr int32_t CONCURRENT_KEYS = 512;
-constexpr size_t CONCURRENT_VALUE_SIZE = 256;
+constexpr int32_t CONCURRENT_KEYS = 1024;
+constexpr size_t CONCURRENT_VALUE_SIZE = 8 * 1024;
+constexpr int32_t CONCURRENT_DELETE_KEYS = 384;
+constexpr int32_t CONCURRENT_DELETE_STEP = 2;
 constexpr int32_t CONCURRENT_READERS = 3;
-constexpr int64_t CONCURRENT_WORKLOAD_MS = 2500;
+constexpr int64_t CONCURRENT_BASELINE_MS = 800;
+constexpr int32_t CONCURRENT_DELETE_CHUNK = 16;
+constexpr int64_t CONCURRENT_DELETE_SLEEP_MS = 10;
+constexpr int64_t CONCURRENT_RECLAIM_TIMEOUT_MS = 30000;
+constexpr int64_t CONCURRENT_RECLAIM_WINDOW_MS = 3000;
+constexpr int64_t CONCURRENT_RECLAIM_MIN_DROP_PERCENT = 10;
+// The two latency bounds below are engineering upper bounds against long blocking/deadlock,
+// not spec numbers; spec AC-1.5 itself does not define a fixed millisecond threshold.
+constexpr int64_t CONCURRENT_MAX_READ_MICROS = 5 * 1000 * 1000;
+constexpr int64_t CONCURRENT_P95_MULTIPLIER = 10;
+constexpr int64_t CONCURRENT_P95_FLOOR_MICROS = 1000 * 1000;
 constexpr int64_t READER_YIELD_MS = 1;
 
 constexpr int32_t PERF_ROUNDS = 3;
@@ -82,11 +98,15 @@ constexpr size_t PERF_VALUE_SIZE = 1024;
 
 constexpr int64_t PERF_DEGRADE_LIMIT_PERCENT = 10;
 constexpr int64_t PERF_ABS_JITTER_US = 200;
+constexpr int64_t PERF_RECLAIM_MIN_DROP_PERCENT = 10;
 
 
 struct DiskUsage {
     uint64_t blockBytes = 0;
+    uint64_t dbBlockBytes = 0;
+    uint64_t otherBlockBytes = 0;
     uint32_t fileCount = 0;
+    uint32_t dbFileCount = 0;
     bool valid = false;
 };
 
@@ -129,6 +149,13 @@ int64_t Median(std::vector<int64_t> samples)
     return samples[middle];
 }
 
+bool EndsWithDbSuffix(const std::string &name)
+{
+    constexpr const char *DB_SUFFIX = ".db";
+    size_t suffixSize = std::string(DB_SUFFIX).size();
+    return name.size() >= suffixSize && name.compare(name.size() - suffixSize, suffixSize, DB_SUFFIX) == 0;
+}
+
 void AccumulateDiskUsage(const std::string &dir, DiskUsage &usage)
 {
     DIR *handle = opendir(dir.c_str());
@@ -153,10 +180,15 @@ void AccumulateDiskUsage(const std::string &dir, DiskUsage &usage)
         if (!S_ISREG(info.st_mode)) {
             continue;
         }
-        if (info.st_blocks > 0) {
-            usage.blockBytes += static_cast<uint64_t>(info.st_blocks) * 512ULL;
-        }
+        uint64_t blocks = info.st_blocks > 0 ? static_cast<uint64_t>(info.st_blocks) * DISK_BLOCK_SIZE_BYTES : 0;
+        usage.blockBytes += blocks;
         usage.fileCount++;
+        if (EndsWithDbSuffix(name)) {
+            usage.dbBlockBytes += blocks;
+            usage.dbFileCount++;
+        } else {
+            usage.otherBlockBytes += blocks;
+        }
     }
     closedir(handle);
 }
@@ -171,6 +203,85 @@ bool QueryStoreDiskUsage(const std::string &storeId, DiskUsage &usage)
     AccumulateDiskUsage(std::string(BASE_DIR) + "/kvdb/" + hashDir, usage);
     usage.valid = usage.fileCount > 0 && usage.blockBytes > 0;
     return usage.valid;
+}
+
+bool CheckpointStore(const std::shared_ptr<SingleStoreImpl> &impl)
+{
+    if (impl == nullptr || impl->dbStore_ == nullptr) {
+        return false;
+    }
+    DistributedDB::PragmaData data = nullptr;
+    return impl->dbStore_->Pragma(DistributedDB::EXEC_CHECKPOINT, data) == DistributedDB::DBStatus::OK;
+}
+
+bool ProbeShrinkCapability(const std::shared_ptr<SingleStoreImpl> &impl, std::string &reason)
+{
+    if (impl == nullptr || impl->dbStore_ == nullptr) {
+        reason = "shrink capability probe failed: store is closed";
+        return false;
+    }
+    DistributedDB::ShrinkParam setParam;
+    setParam.operation = DistributedDB::ShrinkOperation::SET;
+    setParam.enable = false;
+    DistributedDB::PragmaData setData = &setParam;
+    auto setStatus = impl->dbStore_->Pragma(DistributedDB::SHRINK, setData);
+    if (setStatus != DistributedDB::DBStatus::OK) {
+        reason = "shrink capability probe failed: SHRINK SET status=" +
+            std::to_string(static_cast<int32_t>(setStatus)) +
+            " (SQLite fallback or engine without GRD_KVSetDbShrinkEnable)";
+        return false;
+    }
+    DistributedDB::ShrinkParam getParam;
+    getParam.operation = DistributedDB::ShrinkOperation::GET;
+    DistributedDB::PragmaData getData = &getParam;
+    auto getStatus = impl->dbStore_->Pragma(DistributedDB::SHRINK, getData);
+    if (getStatus != DistributedDB::DBStatus::OK) {
+        reason = "shrink capability probe failed: SHRINK GET status=" +
+            std::to_string(static_cast<int32_t>(getStatus)) +
+            " (engine without GRD_KVGetDbShrinkEnable)";
+        return false;
+    }
+    return true;
+}
+
+bool PutBatchChunked(const std::shared_ptr<SingleKvStore> &store, const std::vector<Entry> &entries)
+{
+    if (store == nullptr) {
+        return false;
+    }
+    if (entries.empty()) {
+        return true;
+    }
+    size_t offset = 0;
+    while (offset < entries.size()) {
+        size_t count = std::min(static_cast<size_t>(MAX_BATCH_ENTRIES), entries.size() - offset);
+        std::vector<Entry> chunk(entries.begin() + offset, entries.begin() + offset + count);
+        if (store->PutBatch(chunk) != SUCCESS) {
+            return false;
+        }
+        offset += count;
+    }
+    return true;
+}
+
+bool DeleteBatchChunked(const std::shared_ptr<SingleKvStore> &store, const std::vector<Key> &keys)
+{
+    if (store == nullptr) {
+        return false;
+    }
+    if (keys.empty()) {
+        return true;
+    }
+    size_t offset = 0;
+    while (offset < keys.size()) {
+        size_t count = std::min(static_cast<size_t>(MAX_BATCH_ENTRIES), keys.size() - offset);
+        std::vector<Key> chunk(keys.begin() + offset, keys.begin() + offset + count);
+        if (store->DeleteBatch(chunk) != SUCCESS) {
+            return false;
+        }
+        offset += count;
+    }
+    return true;
 }
 
 bool HasReclaimDrop(uint64_t peakBytes, uint64_t currentBytes)
@@ -197,7 +308,8 @@ bool ExceedsHousekeepingDrop(uint64_t beforeBytes, uint64_t afterBytes)
     return afterBytes + beforeBytes * HOUSEKEEPING_DROP_PERCENT / 100 < beforeBytes;
 }
 
-std::vector<Entry> MakeEntries(const std::string &prefix, int32_t count, size_t valueSize)
+std::vector<Entry> MakeEntries(const std::string &prefix, int32_t count, size_t valueSize,
+    bool distinct = false)
 {
     std::vector<Entry> entries;
     entries.reserve(static_cast<size_t>(count));
@@ -205,7 +317,13 @@ std::vector<Entry> MakeEntries(const std::string &prefix, int32_t count, size_t 
     for (int32_t index = 0; index < count; ++index) {
         Entry entry;
         entry.key = prefix + std::to_string(index);
-        entry.value = value;
+        if (distinct) {
+            std::string distinctValue = "v_" + std::to_string(index) + "_";
+            distinctValue.resize(valueSize, 'v');
+            entry.value = distinctValue;
+        } else {
+            entry.value = value;
+        }
         entries.push_back(std::move(entry));
     }
     return entries;
@@ -283,9 +401,15 @@ bool ReadResultSetByPrefix(const std::shared_ptr<SingleStoreImpl> &impl, const K
     return false;
 }
 
-bool EntryValueEquals(const SingleStoreImpl::DBEntry &entry, const std::string &expected)
+bool DBEntryMatches(const SingleStoreImpl::DBEntry &entry,
+    const std::map<std::string, std::string> &expectedValues)
 {
-    return std::string(entry.value.begin(), entry.value.end()) == expected;
+    std::string key(entry.key.begin(), entry.key.end());
+    auto iter = expectedValues.find(key);
+    if (iter == expectedValues.end()) {
+        return false;
+    }
+    return std::string(entry.value.begin(), entry.value.end()) == iter->second;
 }
 }
 
@@ -354,69 +478,95 @@ std::shared_ptr<SingleStoreImpl> EnableShrinkTest::AsImpl(const std::shared_ptr<
     return std::static_pointer_cast<SingleStoreImpl>(store);
 }
 
-
-
-
 HWTEST_F(EnableShrinkTest, SetShrinkEnablePhysicalReclaim, TestSize.Level1)
 {
     const std::string storeId = "EnableShrinkPhysicalReclaim";
     auto store = CreateStore(storeId, KvStoreType::LOCAL_ONLY);
     ASSERT_NE(store, nullptr);
-    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
+    std::string probeReason;
+    if (!ProbeShrinkCapability(impl, probeReason)) {
+        CloseStore(storeId, store);
+        GTEST_SKIP() << probeReason;
+    }
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     ASSERT_TRUE(WaitShrinkSettled(*impl, true, WAIT_SWITCH_TIMEOUT_MS));
 
-    DiskUsage peak;
-    for (int32_t round = 0; round < RECLAIM_BIG_ROUNDS; ++round) {
-        std::string prefix = "reclaim_big_" + std::to_string(round) + "_";
-        auto entries = MakeEntries(prefix, RECLAIM_BIG_KEYS_PER_ROUND, RECLAIM_BIG_VALUE_SIZE);
-        ASSERT_EQ(store->PutBatch(entries), SUCCESS);
-        SleepMillis(SETTLE_INTERVAL_MS);
-        DiskUsage written;
-        if (QueryStoreDiskUsage(storeId, written) && written.blockBytes > peak.blockBytes) {
-            peak = written;
+    // AC-1.1: 连续写入约 20MiB（20 批 x 128 条 x 8KiB），确保单个 space 的 free-list 超过 1MiB 回收阈值。
+    std::vector<Key> writtenKeys;
+    writtenKeys.reserve(static_cast<size_t>(RECLAIM_TOTAL_KEYS));
+    for (int32_t batch = 0; batch < RECLAIM_WRITE_BATCHES; ++batch) {
+        auto entries = MakeEntries("physical_reclaim_" + std::to_string(batch) + "_",
+            RECLAIM_KEYS_PER_BATCH, RECLAIM_VALUE_SIZE);
+        for (const auto &entry : entries) {
+            writtenKeys.push_back(entry.key);
         }
-        ASSERT_EQ(store->DeleteBatch(MakeKeys(entries)), SUCCESS);
+        ASSERT_TRUE(PutBatchChunked(store, entries)) << "write batch " << batch << " failed";
+    }
+    bool checkpointBeforeDelete = CheckpointStore(impl);
+    SleepMillis(SETTLE_INTERVAL_MS);
+    DiskUsage peak;
+    for (int32_t scan = 0; scan < RECLAIM_PEAK_SCANS; ++scan) {
+        DiskUsage current;
+        if (QueryStoreDiskUsage(storeId, current) && current.dbBlockBytes > peak.dbBlockBytes) {
+            peak = current;
+        }
         SleepMillis(SETTLE_INTERVAL_MS);
     }
+    ASSERT_TRUE(DeleteBatchChunked(store, writtenKeys)) << "deleting all written keys failed";
+    bool checkpointAfterDelete = CheckpointStore(impl);
+    SleepMillis(SETTLE_INTERVAL_MS);
 
     DiskUsage finalUsage;
     int64_t dropPercent = 0;
-    if (peak.valid) {
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(WAIT_RECLAIM_TIMEOUT_MS);
-        while (true) {
+    bool reclaimObserved = false;
+    if (peak.valid && peak.dbBlockBytes > 0) {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(RECLAIM_SETTLE_TIMEOUT_MS);
+        while (std::chrono::steady_clock::now() < deadline) {
             DiskUsage current;
-            if (QueryStoreDiskUsage(storeId, current) && current.blockBytes < peak.blockBytes) {
-                int64_t dropped = static_cast<int64_t>(peak.blockBytes) - static_cast<int64_t>(current.blockBytes);
-                int64_t percent = dropped * 100 / static_cast<int64_t>(peak.blockBytes);
-                if (percent > dropPercent) {
-                    dropPercent = percent;
+            if (QueryStoreDiskUsage(storeId, current)) {
+                int64_t currentDrop = DropPercent(peak.dbBlockBytes, current.dbBlockBytes);
+                if (currentDrop > dropPercent) {
+                    dropPercent = currentDrop;
                     finalUsage = current;
+                }
+                if (HasReclaimDrop(peak.dbBlockBytes, current.dbBlockBytes)) {
+                    // >=10% only proves shrink is active; the AC-1.1 target is 85%, so keep polling.
+                    reclaimObserved = true;
                 }
                 if (dropPercent >= RECLAIM_MIN_DROP_PERCENT) {
                     break;
                 }
             }
-            if (std::chrono::steady_clock::now() >= deadline) {
-                break;
-            }
             SleepMillis(POLL_INTERVAL_MS);
         }
-        if (!finalUsage.valid) {
-            (void)QueryStoreDiskUsage(storeId, finalUsage);
-        }
     }
-    RecordProperty("physical_peak_blocks_bytes", static_cast<int64_t>(peak.blockBytes));
-    RecordProperty("physical_final_blocks_bytes", static_cast<int64_t>(finalUsage.blockBytes));
+    if (!finalUsage.valid) {
+        (void)QueryStoreDiskUsage(storeId, finalUsage);
+        dropPercent = DropPercent(peak.dbBlockBytes, finalUsage.dbBlockBytes);
+    }
+
+    RecordProperty("physical_peak_blocks_bytes", static_cast<int64_t>(peak.dbBlockBytes));
+    RecordProperty("physical_final_blocks_bytes", static_cast<int64_t>(finalUsage.dbBlockBytes));
+    RecordProperty("physical_peak_db_bytes", static_cast<int64_t>(peak.dbBlockBytes));
+    RecordProperty("physical_final_db_bytes", static_cast<int64_t>(finalUsage.dbBlockBytes));
+    RecordProperty("physical_peak_other_bytes", static_cast<int64_t>(peak.otherBlockBytes));
+    RecordProperty("physical_final_other_bytes", static_cast<int64_t>(finalUsage.otherBlockBytes));
+    RecordProperty("physical_peak_all_bytes", static_cast<int64_t>(peak.blockBytes));
+    RecordProperty("physical_final_all_bytes", static_cast<int64_t>(finalUsage.blockBytes));
     RecordProperty("physical_drop_percent", dropPercent);
+    RecordProperty("physical_reclaim_observed", std::string(reclaimObserved ? "true" : "false"));
+    RecordProperty("physical_checkpoint_before_delete", std::string(checkpointBeforeDelete ? "true" : "false"));
+    RecordProperty("physical_checkpoint_after_delete", std::string(checkpointAfterDelete ? "true" : "false"));
     CloseStore(storeId, store);
-    if (!peak.valid) {
+    if (!peak.valid || !finalUsage.valid || peak.dbBlockBytes == 0) {
         GTEST_SKIP() << "evidence gap: the RD database directory of the store is not measurable on this image";
     }
+
     EXPECT_GE(dropPercent, RECLAIM_MIN_DROP_PERCENT)
-        << "physical usage only dropped " << dropPercent << "% (peak=" << peak.blockBytes
-        << ", final=" << finalUsage.blockBytes << ")";
+        << "physical usage only dropped " << dropPercent << "% (peak=" << peak.dbBlockBytes
+        << ", final=" << finalUsage.dbBlockBytes << ")";
 }
 
 HWTEST_F(EnableShrinkTest, EncryptStoreShrinkCompatibility, TestSize.Level1)
@@ -448,7 +598,6 @@ HWTEST_F(EnableShrinkTest, EncryptStoreShrinkCompatibility, TestSize.Level1)
     CloseStore(storeId, store);
 }
 
-
 HWTEST_F(EnableShrinkTest, NoEnableNoReclaim, TestSize.Level1)
 {
     const std::string storeId = "EnableShrinkNoEnable";
@@ -456,34 +605,46 @@ HWTEST_F(EnableShrinkTest, NoEnableNoReclaim, TestSize.Level1)
     ASSERT_NE(store, nullptr);
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
+    std::string probeReason;
+    if (!ProbeShrinkCapability(impl, probeReason)) {
+        CloseStore(storeId, store);
+        GTEST_SKIP() << probeReason;
+    }
     auto initialState = ReadShrinkState(*impl);
     EXPECT_FALSE(initialState.desiredEnabled);
     EXPECT_EQ(initialState.pendingTasks, 0u);
 
     auto entries = MakeEntries("noenable_", PLAIN_KEYS, PLAIN_VALUE_SIZE);
-    ASSERT_EQ(store->PutBatch(entries), SUCCESS);
+    ASSERT_TRUE(PutBatchChunked(store, entries));
+    bool checkpointBeforeDelete = CheckpointStore(impl);
     SleepMillis(SETTLE_INTERVAL_MS);
     DiskUsage written;
     bool measuredBefore = QueryStoreDiskUsage(storeId, written);
-    ASSERT_EQ(store->DeleteBatch(MakeKeys(entries)), SUCCESS);
+    ASSERT_TRUE(DeleteBatchChunked(store, MakeKeys(entries)));
     SleepMillis(NO_DELETE_OBSERVE_MS);
+    bool checkpointAfterDelete = CheckpointStore(impl);
+    SleepMillis(SETTLE_INTERVAL_MS);
 
     DiskUsage afterDelete;
     bool measuredAfter = QueryStoreDiskUsage(storeId, afterDelete);
     auto endState = ReadShrinkState(*impl);
     EXPECT_FALSE(endState.desiredEnabled);
     EXPECT_EQ(endState.pendingTasks, 0u);
-    RecordProperty("noenable_bytes_after_write", static_cast<int64_t>(written.blockBytes));
-    RecordProperty("noenable_bytes_after_delete", static_cast<int64_t>(afterDelete.blockBytes));
+    RecordProperty("noenable_bytes_after_write", static_cast<int64_t>(written.dbBlockBytes));
+    RecordProperty("noenable_bytes_after_delete", static_cast<int64_t>(afterDelete.dbBlockBytes));
+    RecordProperty("noenable_other_bytes_after_write", static_cast<int64_t>(written.otherBlockBytes));
+    RecordProperty("noenable_other_bytes_after_delete", static_cast<int64_t>(afterDelete.otherBlockBytes));
+    RecordProperty("noenable_checkpoint_ok",
+        std::string((checkpointBeforeDelete && checkpointAfterDelete) ? "true" : "false"));
     RecordProperty("noenable_evidence_gap", std::string("the engine internal file housekeeping is not "
         "controllable; no switch task is ever requested, so the desired state stays false and no task "
         "is pending"));
     CloseStore(storeId, store);
-    if (!measuredBefore || !measuredAfter) {
+    if (!measuredBefore || !measuredAfter || written.dbBlockBytes == 0) {
         GTEST_SKIP() << "evidence gap: the RD database directory of the store is not measurable on this image";
     }
 
-    EXPECT_FALSE(ExceedsHousekeepingDrop(written.blockBytes, afterDelete.blockBytes))
+    EXPECT_FALSE(ExceedsHousekeepingDrop(written.dbBlockBytes, afterDelete.dbBlockBytes))
         << "physical usage dropped although shrink was never enabled";
 }
 
@@ -492,38 +653,53 @@ HWTEST_F(EnableShrinkTest, NoDeleteNoReclaim, TestSize.Level1)
     const std::string storeId = "EnableShrinkNoDelete";
     auto store = CreateStore(storeId, KvStoreType::LOCAL_ONLY);
     ASSERT_NE(store, nullptr);
-    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
+    std::string probeReason;
+    if (!ProbeShrinkCapability(impl, probeReason)) {
+        CloseStore(storeId, store);
+        GTEST_SKIP() << probeReason;
+    }
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     ASSERT_TRUE(WaitShrinkSettled(*impl, true, WAIT_SWITCH_TIMEOUT_MS));
 
     auto entries = MakeEntries("nodelete_", PLAIN_KEYS, PLAIN_VALUE_SIZE);
-    ASSERT_EQ(store->PutBatch(entries), SUCCESS);
+    ASSERT_TRUE(PutBatchChunked(store, entries));
+    bool checkpointBeforeObserve = CheckpointStore(impl);
     SleepMillis(SETTLE_INTERVAL_MS);
     DiskUsage baseline;
     bool measured = QueryStoreDiskUsage(storeId, baseline);
 
-    uint64_t minimumBytes = baseline.blockBytes;
+    uint64_t minimumBytes = baseline.dbBlockBytes;
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(NO_DELETE_OBSERVE_MS);
     while (std::chrono::steady_clock::now() < deadline) {
         SleepMillis(POLL_INTERVAL_MS);
         DiskUsage sample;
-        if (QueryStoreDiskUsage(storeId, sample) && sample.blockBytes < minimumBytes) {
-            minimumBytes = sample.blockBytes;
+        if (QueryStoreDiskUsage(storeId, sample) && sample.dbBlockBytes < minimumBytes) {
+            minimumBytes = sample.dbBlockBytes;
         }
     }
     auto endState = ReadShrinkState(*impl);
     EXPECT_TRUE(endState.desiredEnabled);
     EXPECT_EQ(endState.pendingTasks, 0u);
-    RecordProperty("nodelete_baseline_blocks_bytes", static_cast<int64_t>(baseline.blockBytes));
+    bool checkpointAfterObserve = CheckpointStore(impl);
+    SleepMillis(SETTLE_INTERVAL_MS);
+    DiskUsage finalUsage;
+    (void)QueryStoreDiskUsage(storeId, finalUsage);
+    RecordProperty("nodelete_baseline_blocks_bytes", static_cast<int64_t>(baseline.dbBlockBytes));
     RecordProperty("nodelete_minimum_blocks_bytes", static_cast<int64_t>(minimumBytes));
+    RecordProperty("nodelete_final_blocks_bytes", static_cast<int64_t>(finalUsage.dbBlockBytes));
+    RecordProperty("nodelete_baseline_other_bytes", static_cast<int64_t>(baseline.otherBlockBytes));
+    RecordProperty("nodelete_final_other_bytes", static_cast<int64_t>(finalUsage.otherBlockBytes));
+    RecordProperty("nodelete_checkpoint_ok",
+        std::string((checkpointBeforeObserve && checkpointAfterObserve) ? "true" : "false"));
     RecordProperty("nodelete_evidence_gap", std::string("the engine reclamation threshold is internal and "
         "not controllable; normal file housekeeping is tolerated below the shrink scale"));
     CloseStore(storeId, store);
-    if (!measured) {
+    if (!measured || baseline.dbBlockBytes == 0) {
         GTEST_SKIP() << "evidence gap: the RD database directory of the store is not measurable on this image";
     }
-    EXPECT_FALSE(ExceedsHousekeepingDrop(baseline.blockBytes, minimumBytes))
+    EXPECT_FALSE(ExceedsHousekeepingDrop(baseline.dbBlockBytes, minimumBytes))
         << "physical usage dropped without deletes";
 }
 
@@ -532,13 +708,19 @@ HWTEST_F(EnableShrinkTest, BelowThresholdNoReclaim, TestSize.Level1)
     const std::string storeId = "EnableShrinkBelowThreshold";
     auto store = CreateStore(storeId, KvStoreType::LOCAL_ONLY);
     ASSERT_NE(store, nullptr);
-    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
+    std::string probeReason;
+    if (!ProbeShrinkCapability(impl, probeReason)) {
+        CloseStore(storeId, store);
+        GTEST_SKIP() << probeReason;
+    }
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     ASSERT_TRUE(WaitShrinkSettled(*impl, true, WAIT_SWITCH_TIMEOUT_MS));
 
     auto entries = MakeEntries("below_threshold_", PLAIN_KEYS, PLAIN_VALUE_SIZE);
-    ASSERT_EQ(store->PutBatch(entries), SUCCESS);
+    ASSERT_TRUE(PutBatchChunked(store, entries));
+    bool checkpointBeforeObserve = CheckpointStore(impl);
     SleepMillis(SETTLE_INTERVAL_MS);
     DiskUsage baseline;
     bool measured = QueryStoreDiskUsage(storeId, baseline);
@@ -548,30 +730,39 @@ HWTEST_F(EnableShrinkTest, BelowThresholdNoReclaim, TestSize.Level1)
     for (int32_t index = 0; index < BELOW_THRESHOLD_DELETE_KEYS; ++index) {
         deleteKeys.push_back(entries[index].key);
     }
-    ASSERT_EQ(store->DeleteBatch(deleteKeys), SUCCESS);
+    ASSERT_TRUE(DeleteBatchChunked(store, deleteKeys));
 
-    uint64_t minimumBytes = baseline.blockBytes;
+    uint64_t minimumBytes = baseline.dbBlockBytes;
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(NO_DELETE_OBSERVE_MS);
     while (std::chrono::steady_clock::now() < deadline) {
         SleepMillis(POLL_INTERVAL_MS);
         DiskUsage sample;
-        if (QueryStoreDiskUsage(storeId, sample) && sample.blockBytes < minimumBytes) {
-            minimumBytes = sample.blockBytes;
+        if (QueryStoreDiskUsage(storeId, sample) && sample.dbBlockBytes < minimumBytes) {
+            minimumBytes = sample.dbBlockBytes;
         }
     }
+    bool checkpointAfterObserve = CheckpointStore(impl);
+    SleepMillis(SETTLE_INTERVAL_MS);
+    DiskUsage finalUsage;
+    (void)QueryStoreDiskUsage(storeId, finalUsage);
     RecordProperty("below_threshold_deleted_keys", static_cast<int64_t>(BELOW_THRESHOLD_DELETE_KEYS));
     RecordProperty("below_threshold_deleted_bytes",
         static_cast<int64_t>(BELOW_THRESHOLD_DELETE_KEYS) * static_cast<int64_t>(PLAIN_VALUE_SIZE));
-    RecordProperty("below_threshold_baseline_blocks_bytes", static_cast<int64_t>(baseline.blockBytes));
+    RecordProperty("below_threshold_baseline_blocks_bytes", static_cast<int64_t>(baseline.dbBlockBytes));
     RecordProperty("below_threshold_minimum_blocks_bytes", static_cast<int64_t>(minimumBytes));
+    RecordProperty("below_threshold_final_blocks_bytes", static_cast<int64_t>(finalUsage.dbBlockBytes));
+    RecordProperty("below_threshold_baseline_other_bytes", static_cast<int64_t>(baseline.otherBlockBytes));
+    RecordProperty("below_threshold_final_other_bytes", static_cast<int64_t>(finalUsage.otherBlockBytes));
+    RecordProperty("below_threshold_checkpoint_ok",
+        std::string((checkpointBeforeObserve && checkpointAfterObserve) ? "true" : "false"));
     RecordProperty("below_threshold_construction_note", std::string("the per-space free-list is internal; "
         "deleted bytes (640 KiB) are below the 1 MiB threshold"));
     CloseStore(storeId, store);
-    if (!measured) {
+    if (!measured || baseline.dbBlockBytes == 0) {
         GTEST_SKIP() << "environment limitation: the RD database directory of the store is not measurable "
                         "on this image";
     }
-    EXPECT_FALSE(ExceedsHousekeepingDrop(baseline.blockBytes, minimumBytes))
+    EXPECT_FALSE(ExceedsHousekeepingDrop(baseline.dbBlockBytes, minimumBytes))
         << "physical usage dropped after a below-threshold delete";
 }
 
@@ -580,103 +771,235 @@ HWTEST_F(EnableShrinkTest, ConcurrentReadDuringReclaim, TestSize.Level1)
     const std::string storeId = "EnableShrinkConcurrentRead";
     auto store = CreateStore(storeId, KvStoreType::LOCAL_ONLY);
     ASSERT_NE(store, nullptr);
-    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
+    std::string probeReason;
+    if (!ProbeShrinkCapability(impl, probeReason)) {
+        CloseStore(storeId, store);
+        GTEST_SKIP() << probeReason;
+    }
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     ASSERT_TRUE(WaitShrinkSettled(*impl, true, WAIT_SWITCH_TIMEOUT_MS));
 
-    const std::string prefix = "concurrent_stable_";
-    auto entries = MakeEntries(prefix, CONCURRENT_KEYS, CONCURRENT_VALUE_SIZE);
-    ASSERT_EQ(store->PutBatch(entries), SUCCESS);
-    const Key stableKey = entries[1].key;
-    const std::string expectedValue = entries[1].value.ToString();
-    const Key queryPrefix = prefix;
+    // AC-1.5: 写入 1024 x 8KiB = 8MiB，删除 384 条（3MiB）释放超过 1MiB 阈值，回收窗口与读并发。
+    auto entries = MakeEntries("concurrent_", CONCURRENT_KEYS, CONCURRENT_VALUE_SIZE, true);
+    ASSERT_TRUE(PutBatchChunked(store, entries));
+    (void)CheckpointStore(impl);
+    SleepMillis(SETTLE_INTERVAL_MS);
+    DiskUsage beforeDelete;
+    if (!QueryStoreDiskUsage(storeId, beforeDelete) || beforeDelete.dbBlockBytes == 0) {
+        CloseStore(storeId, store);
+        GTEST_SKIP() << "evidence gap: the RD database directory of the store is not measurable on this image";
+    }
 
-    DiskUsage before;
-    bool measuredBefore = QueryStoreDiskUsage(storeId, before);
+    std::map<std::string, std::string> expectedValues;
+    for (const auto &entry : entries) {
+        expectedValues[entry.key.ToString()] = entry.value.ToString();
+    }
+    Key stableKey = entries[1].key;
+    std::string stableValue = entries[1].value.ToString();
+    Key queryPrefix = "concurrent_";
+    std::vector<Key> deleteKeys;
+    deleteKeys.reserve(static_cast<size_t>(CONCURRENT_DELETE_KEYS));
+    for (int32_t index = 0; index < CONCURRENT_DELETE_KEYS * CONCURRENT_DELETE_STEP; index += CONCURRENT_DELETE_STEP) {
+        deleteKeys.push_back(entries[index].key);
+    }
 
+    std::atomic<bool> reclaimPhase { false };
     std::atomic<bool> stop { false };
-    std::atomic<int32_t> readFailures { 0 };
+    std::vector<std::vector<int64_t>> baselineSamples(CONCURRENT_READERS);
+    std::vector<std::vector<int64_t>> reclaimSamples(CONCURRENT_READERS);
+    std::vector<int32_t> readFailures(CONCURRENT_READERS, 0);
     std::vector<std::thread> readers;
-    readers.reserve(CONCURRENT_READERS);
-    for (int32_t index = 0; index < CONCURRENT_READERS; ++index) {
-        readers.emplace_back([&store, &stop, &readFailures, impl, stableKey, expectedValue, queryPrefix]() {
-            while (!stop.load()) {
-                Value value;
-                if (store->Get(stableKey, value) != SUCCESS || value.ToString() != expectedValue) {
-                    readFailures.fetch_add(1);
-                }
-                std::vector<SingleStoreImpl::DBEntry> queried;
-                if (!ReadEntriesByPrefix(impl, queryPrefix, queried)) {
-                    readFailures.fetch_add(1);
+    for (int32_t reader = 0; reader < CONCURRENT_READERS; ++reader) {
+        readers.emplace_back([&, reader]() {
+            auto recordSample = [&](std::chrono::steady_clock::time_point start) {
+                int64_t micros = ElapsedMicros(start);
+                if (reclaimPhase.load()) {
+                    reclaimSamples[reader].push_back(micros);
                 } else {
-                    for (const auto &entry : queried) {
-                        if (!EntryValueEquals(entry, expectedValue)) {
-                            readFailures.fetch_add(1);
-                        }
+                    baselineSamples[reader].push_back(micros);
+                }
+            };
+            while (!stop.load()) {
+                auto start = std::chrono::steady_clock::now();
+                Value value;
+                if (store->Get(stableKey, value) != SUCCESS || value.ToString() != stableValue) {
+                    readFailures[reader]++;
+                }
+                recordSample(start);
+
+                start = std::chrono::steady_clock::now();
+                std::vector<SingleStoreImpl::DBEntry> entriesByPrefix;
+                bool entriesOk = ReadEntriesByPrefix(impl, queryPrefix, entriesByPrefix);
+                for (const auto &entry : entriesByPrefix) {
+                    if (!DBEntryMatches(entry, expectedValues)) {
+                        entriesOk = false;
+                        break;
                     }
                 }
-                DistributedDB::KvStoreResultSet *resultSet = nullptr;
-                if (!ReadResultSetByPrefix(impl, queryPrefix, resultSet)) {
-                    readFailures.fetch_add(1);
-                } else if (resultSet != nullptr) {
-                    int32_t count = resultSet->GetCount();
+                if (!entriesOk) {
+                    readFailures[reader]++;
+                }
+                recordSample(start);
 
-                    if (count < 0 || count > CONCURRENT_KEYS) {
-                        readFailures.fetch_add(1);
-                    }
-                    while (resultSet->MoveToNext()) {
-                        SingleStoreImpl::DBEntry entry;
-                        if (resultSet->GetEntry(entry) != SingleStoreImpl::DBStatus::OK ||
-                            !EntryValueEquals(entry, expectedValue)) {
-                            readFailures.fetch_add(1);
+                start = std::chrono::steady_clock::now();
+                DistributedDB::KvStoreResultSet *resultSet = nullptr;
+                bool resultSetOk = ReadResultSetByPrefix(impl, queryPrefix, resultSet);
+                if (resultSet != nullptr) {
+                    if (resultSetOk) {
+                        int32_t count = resultSet->GetCount();
+                        if (count < 0 || count > CONCURRENT_KEYS) {
+                            resultSetOk = false;
+                        }
+                        while (resultSetOk && resultSet->MoveToNext()) {
+                            SingleStoreImpl::DBEntry entry;
+                            if (resultSet->GetEntry(entry) != SingleStoreImpl::DBStatus::OK ||
+                                !DBEntryMatches(entry, expectedValues)) {
+                                resultSetOk = false;
+                            }
                         }
                     }
                     (void)impl->dbStore_->CloseResultSet(resultSet);
                 }
+                if (!resultSetOk) {
+                    readFailures[reader]++;
+                }
+                recordSample(start);
                 SleepMillis(READER_YIELD_MS);
             }
         });
     }
 
-    std::atomic<int32_t> writeFailures { 0 };
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(CONCURRENT_WORKLOAD_MS);
-    int32_t nextIndex = 0;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (nextIndex >= CONCURRENT_KEYS) {
-            SleepMillis(POLL_INTERVAL_MS);
-            continue;
+    SleepMillis(CONCURRENT_BASELINE_MS);
+    reclaimPhase.store(true);
+    int32_t writeFailures = 0;
+    size_t offset = 0;
+    auto reclaimWindowDeadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(CONCURRENT_RECLAIM_WINDOW_MS);
+    while (offset < deleteKeys.size() && std::chrono::steady_clock::now() < reclaimWindowDeadline) {
+        size_t count = std::min(static_cast<size_t>(CONCURRENT_DELETE_CHUNK), deleteKeys.size() - offset);
+        std::vector<Key> chunk(deleteKeys.begin() + offset, deleteKeys.begin() + offset + count);
+        if (!DeleteBatchChunked(store, chunk)) {
+            writeFailures++;
         }
-        std::vector<Key> keys;
-        for (int32_t step = 0; step < 16 && nextIndex < CONCURRENT_KEYS; step += 2) {
-            keys.push_back(entries[nextIndex].key);
-            nextIndex += 2;
-        }
-        if (!keys.empty() && store->DeleteBatch(keys) != SUCCESS) {
-            writeFailures.fetch_add(1);
-        }
-        SleepMillis(10);
+        offset += count;
+        SleepMillis(CONCURRENT_DELETE_SLEEP_MS);
     }
+    reclaimPhase.store(false);
     stop.store(true);
     for (auto &reader : readers) {
         reader.join();
     }
-    EXPECT_EQ(readFailures.load(), 0);
-    EXPECT_EQ(writeFailures.load(), 0);
 
-    Value value;
-    EXPECT_EQ(store->Get(stableKey, value), SUCCESS);
-    EXPECT_EQ(value.ToString(), expectedValue);
-    EXPECT_EQ(store->Get(entries[0].key, value), KEY_NOT_FOUND);
+    std::vector<int64_t> allBaselineSamples;
+    std::vector<int64_t> allReclaimSamples;
+    int32_t readFailuresTotal = 0;
+    for (int32_t reader = 0; reader < CONCURRENT_READERS; ++reader) {
+        allBaselineSamples.insert(allBaselineSamples.end(), baselineSamples[reader].begin(),
+            baselineSamples[reader].end());
+        allReclaimSamples.insert(allReclaimSamples.end(), reclaimSamples[reader].begin(),
+            reclaimSamples[reader].end());
+        readFailuresTotal += readFailures[reader];
+    }
+    int64_t baselineP95 = Percentile(allBaselineSamples, 95);
+    int64_t reclaimP95 = Percentile(allReclaimSamples, 95);
+    int64_t reclaimMax = allReclaimSamples.empty() ? 0 :
+        *std::max_element(allReclaimSamples.begin(), allReclaimSamples.end());
+    int64_t allowedP95 = std::max(baselineP95 * CONCURRENT_P95_MULTIPLIER, CONCURRENT_P95_FLOOR_MICROS);
 
-    DiskUsage after;
-    bool measuredAfter = QueryStoreDiskUsage(storeId, after);
-    bool dropObserved = measuredBefore && measuredAfter && HasReclaimDrop(before.blockBytes, after.blockBytes);
+    bool checkpointAfterDelete = CheckpointStore(impl);
+    SleepMillis(SETTLE_INTERVAL_MS);
+    DiskUsage finalUsage;
+    int64_t dropPercent = 0;
+    bool reclaimObserved = false;
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(CONCURRENT_RECLAIM_TIMEOUT_MS);
+    while (std::chrono::steady_clock::now() < deadline) {
+        DiskUsage current;
+        if (QueryStoreDiskUsage(storeId, current)) {
+            int64_t currentDrop = DropPercent(beforeDelete.dbBlockBytes, current.dbBlockBytes);
+            if (currentDrop > dropPercent) {
+                dropPercent = currentDrop;
+                finalUsage = current;
+            }
+            if (HasReclaimDrop(beforeDelete.dbBlockBytes, current.dbBlockBytes)) {
+                reclaimObserved = true;
+                break;
+            }
+        }
+        SleepMillis(POLL_INTERVAL_MS);
+    }
+    DiskUsage afterCheckpoint;
+    if (QueryStoreDiskUsage(storeId, afterCheckpoint)) {
+        if (DropPercent(beforeDelete.dbBlockBytes, afterCheckpoint.dbBlockBytes) > dropPercent) {
+            dropPercent = DropPercent(beforeDelete.dbBlockBytes, afterCheckpoint.dbBlockBytes);
+            finalUsage = afterCheckpoint;
+        }
+    }
+    if (!finalUsage.valid) {
+        (void)QueryStoreDiskUsage(storeId, finalUsage);
+    }
+
+    Value stableCheck;
+    EXPECT_EQ(store->Get(stableKey, stableCheck), SUCCESS);
+    EXPECT_EQ(stableCheck.ToString(), stableValue);
+    EXPECT_EQ(store->Get(entries[0].key, stableCheck), KEY_NOT_FOUND);
+    std::vector<SingleStoreImpl::DBEntry> surviving;
+    bool readSurviving = ReadEntriesByPrefix(impl, queryPrefix, surviving);
+    EXPECT_TRUE(readSurviving);
+    EXPECT_EQ(static_cast<int32_t>(surviving.size()), CONCURRENT_KEYS - CONCURRENT_DELETE_KEYS);
+    int32_t survivingMismatches = 0;
+    std::map<std::string, int32_t> survivingSeen;
+    for (const auto &entry : surviving) {
+        if (!DBEntryMatches(entry, expectedValues)) {
+            survivingMismatches++;
+        }
+        survivingSeen[std::string(entry.key.begin(), entry.key.end())]++;
+    }
+    int32_t duplicateSurviving = 0;
+    for (const auto &item : survivingSeen) {
+        if (item.second != 1) {
+            duplicateSurviving++;
+        }
+    }
+    EXPECT_EQ(survivingMismatches, 0);
+    EXPECT_EQ(duplicateSurviving, 0);
+    EXPECT_EQ(static_cast<int32_t>(survivingSeen.size()), CONCURRENT_KEYS - CONCURRENT_DELETE_KEYS);
+
     RecordProperty("concurrent_readers", static_cast<int64_t>(CONCURRENT_READERS));
-    RecordProperty("concurrent_physical_drop_observed", std::string(dropObserved ? "true" : "false"));
+    RecordProperty("concurrent_stock_bytes",
+        static_cast<int64_t>(CONCURRENT_KEYS) * static_cast<int64_t>(CONCURRENT_VALUE_SIZE));
+    RecordProperty("concurrent_deleted_bytes",
+        static_cast<int64_t>(CONCURRENT_DELETE_KEYS) * static_cast<int64_t>(CONCURRENT_VALUE_SIZE));
+    RecordProperty("concurrent_baseline_samples", static_cast<int64_t>(allBaselineSamples.size()));
+    RecordProperty("concurrent_reclaim_samples", static_cast<int64_t>(allReclaimSamples.size()));
+    RecordProperty("concurrent_baseline_p95_us", baselineP95);
+    RecordProperty("concurrent_reclaim_p95_us", reclaimP95);
+    RecordProperty("concurrent_reclaim_max_us", reclaimMax);
+    RecordProperty("concurrent_read_failures", static_cast<int64_t>(readFailuresTotal));
+    RecordProperty("concurrent_write_failures", static_cast<int64_t>(writeFailures));
+    RecordProperty("concurrent_physical_drop_percent", dropPercent);
+    RecordProperty("concurrent_physical_drop_observed", std::string(reclaimObserved ? "true" : "false"));
+    RecordProperty("concurrent_reclaim_observed", std::string(reclaimObserved ? "true" : "false"));
+    RecordProperty("concurrent_checkpoint_ok", std::string(checkpointAfterDelete ? "true" : "false"));
     RecordProperty("concurrent_evidence_gap", std::string("the engine internal reclamation window is not "
-        "directly observable; concurrent reads are verified while shrink is enabled and deletes run"));
+        "directly observable; dbBlockBytes drop and per-phase read latency are used as the closest evidence"));
     CloseStore(storeId, store);
+    if (!finalUsage.valid) {
+        GTEST_SKIP() << "evidence gap: the RD database directory of the store is not measurable on this image";
+    }
+
+    EXPECT_FALSE(allBaselineSamples.empty()) << "readers produced no baseline latency samples";
+    EXPECT_FALSE(allReclaimSamples.empty()) << "readers produced no reclaim phase latency samples";
+    EXPECT_EQ(readFailuresTotal, 0) << "readers observed errors while deletes were running";
+    EXPECT_EQ(writeFailures, 0) << "deletes failed during the reclaim window";
+    EXPECT_TRUE(reclaimObserved) << "no shrink driven dbBlockBytes drop was observed (drop="
+        << dropPercent << "%, before=" << beforeDelete.dbBlockBytes << ", final=" << finalUsage.dbBlockBytes << ")";
+    EXPECT_GE(dropPercent, CONCURRENT_RECLAIM_MIN_DROP_PERCENT)
+        << "physical drop below " << CONCURRENT_RECLAIM_MIN_DROP_PERCENT << "% during the reclaim window";
+    EXPECT_LE(reclaimP95, allowedP95) << "reclaim phase read P95 " << reclaimP95
+        << "us exceeded allowed " << allowedP95 << "us (baseline P95=" << baselineP95 << "us)";
+    EXPECT_LT(reclaimMax, CONCURRENT_MAX_READ_MICROS) << "a single read blocked for " << reclaimMax << "us";
 }
 
 HWTEST_F(EnableShrinkTest, DisableStopsNewReclaim, TestSize.Level1)
@@ -686,9 +1009,13 @@ HWTEST_F(EnableShrinkTest, DisableStopsNewReclaim, TestSize.Level1)
     ASSERT_NE(store, nullptr);
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
+    std::string probeReason;
+    if (!ProbeShrinkCapability(impl, probeReason)) {
+        CloseStore(storeId, store);
+        GTEST_SKIP() << probeReason;
+    }
 
     ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
-
     ASSERT_TRUE(WaitShrinkSettled(*impl, true, WAIT_SWITCH_TIMEOUT_MS));
     ASSERT_EQ(store->SetShrinkEnable(false), SUCCESS);
     ASSERT_TRUE(WaitShrinkSettled(*impl, false, WAIT_SWITCH_TIMEOUT_MS));
@@ -700,30 +1027,37 @@ HWTEST_F(EnableShrinkTest, DisableStopsNewReclaim, TestSize.Level1)
     ASSERT_TRUE(WaitShrinkSettled(*impl, false, WAIT_SWITCH_TIMEOUT_MS));
 
     auto entries = MakeEntries("disable_then_delete_", PLAIN_KEYS, PLAIN_VALUE_SIZE);
-    ASSERT_EQ(store->PutBatch(entries), SUCCESS);
+    ASSERT_TRUE(PutBatchChunked(store, entries));
+    bool checkpointBeforeDelete = CheckpointStore(impl);
     SleepMillis(SETTLE_INTERVAL_MS);
     DiskUsage written;
     bool measuredBefore = QueryStoreDiskUsage(storeId, written);
-    ASSERT_EQ(store->DeleteBatch(MakeKeys(entries)), SUCCESS);
+    ASSERT_TRUE(DeleteBatchChunked(store, MakeKeys(entries)));
     SleepMillis(NO_DELETE_OBSERVE_MS);
+    bool checkpointAfterDelete = CheckpointStore(impl);
+    SleepMillis(SETTLE_INTERVAL_MS);
 
     DiskUsage afterDelete;
     bool measuredAfter = QueryStoreDiskUsage(storeId, afterDelete);
     auto afterDeletes = ReadShrinkState(*impl);
     EXPECT_FALSE(afterDeletes.desiredEnabled);
     EXPECT_EQ(afterDeletes.pendingTasks, 0u);
-    RecordProperty("disable_blocks_after_write", static_cast<int64_t>(written.blockBytes));
-    RecordProperty("disable_blocks_after_delete", static_cast<int64_t>(afterDelete.blockBytes));
+    RecordProperty("disable_blocks_after_write", static_cast<int64_t>(written.dbBlockBytes));
+    RecordProperty("disable_blocks_after_delete", static_cast<int64_t>(afterDelete.dbBlockBytes));
     RecordProperty("disable_switch_pending_tasks_after_delete",
         static_cast<int64_t>(afterDeletes.pendingTasks));
+    RecordProperty("disable_other_bytes_after_write", static_cast<int64_t>(written.otherBlockBytes));
+    RecordProperty("disable_other_bytes_after_delete", static_cast<int64_t>(afterDelete.otherBlockBytes));
+    RecordProperty("disable_checkpoint_ok",
+        std::string((checkpointBeforeDelete && checkpointAfterDelete) ? "true" : "false"));
     RecordProperty("disable_evidence_gap", std::string("an engine call or reclamation that started before "
         "the disable may still complete; no new switch task is queued; normal file housekeeping is tolerated"));
     CloseStore(storeId, store);
-    if (!measuredBefore || !measuredAfter) {
+    if (!measuredBefore || !measuredAfter || written.dbBlockBytes == 0) {
         GTEST_SKIP() << "evidence gap: the RD database directory of the store is not measurable on this image";
     }
 
-    EXPECT_FALSE(ExceedsHousekeepingDrop(written.blockBytes, afterDelete.blockBytes))
+    EXPECT_FALSE(ExceedsHousekeepingDrop(written.dbBlockBytes, afterDelete.dbBlockBytes))
         << "physical usage dropped although shrink was disabled before the deletes";
 }
 
@@ -734,22 +1068,29 @@ HWTEST_F(EnableShrinkTest, ToggleDuringDeletePhysicalReclaim, TestSize.Level1)
     ASSERT_NE(store, nullptr);
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
+    std::string probeReason;
+    if (!ProbeShrinkCapability(impl, probeReason)) {
+        CloseStore(storeId, store);
+        GTEST_SKIP() << probeReason;
+    }
 
     ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     ASSERT_TRUE(WaitShrinkSettled(*impl, true, WAIT_SWITCH_TIMEOUT_MS));
     auto enabledEntries = MakeEntries("toggle_physical_on_", RECLAIM_KEYS_PER_ROUND, RECLAIM_VALUE_SIZE);
-    ASSERT_EQ(store->PutBatch(enabledEntries), SUCCESS);
+    ASSERT_TRUE(PutBatchChunked(store, enabledEntries));
+    bool checkpointEnabledBefore = CheckpointStore(impl);
     SleepMillis(SETTLE_INTERVAL_MS);
     DiskUsage enabledPeak;
     bool enabledMeasured = QueryStoreDiskUsage(storeId, enabledPeak);
-    ASSERT_EQ(store->DeleteBatch(MakeKeys(enabledEntries)), SUCCESS);
+    ASSERT_TRUE(DeleteBatchChunked(store, MakeKeys(enabledEntries)));
+    bool checkpointEnabledAfter = CheckpointStore(impl);
     DiskUsage enabledFinal;
     bool enabledReclaimed = false;
     if (enabledMeasured) {
         auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(WAIT_RECLAIM_TIMEOUT_MS);
         while (std::chrono::steady_clock::now() < deadline) {
             if (QueryStoreDiskUsage(storeId, enabledFinal) &&
-                HasReclaimDrop(enabledPeak.blockBytes, enabledFinal.blockBytes)) {
+                HasReclaimDrop(enabledPeak.dbBlockBytes, enabledFinal.dbBlockBytes)) {
                 enabledReclaimed = true;
                 break;
             }
@@ -759,45 +1100,58 @@ HWTEST_F(EnableShrinkTest, ToggleDuringDeletePhysicalReclaim, TestSize.Level1)
             (void)QueryStoreDiskUsage(storeId, enabledFinal);
         }
     }
-    RecordProperty("enabled_peak_blocks_bytes", static_cast<int64_t>(enabledPeak.blockBytes));
-    RecordProperty("enabled_final_blocks_bytes", static_cast<int64_t>(enabledFinal.blockBytes));
-    RecordProperty("enabled_drop_percent", DropPercent(enabledPeak.blockBytes, enabledFinal.blockBytes));
+    RecordProperty("enabled_peak_blocks_bytes", static_cast<int64_t>(enabledPeak.dbBlockBytes));
+    RecordProperty("enabled_final_blocks_bytes", static_cast<int64_t>(enabledFinal.dbBlockBytes));
+    RecordProperty("enabled_drop_percent", DropPercent(enabledPeak.dbBlockBytes, enabledFinal.dbBlockBytes));
+    RecordProperty("enabled_peak_other_bytes", static_cast<int64_t>(enabledPeak.otherBlockBytes));
+    RecordProperty("enabled_final_other_bytes", static_cast<int64_t>(enabledFinal.otherBlockBytes));
+    RecordProperty("enabled_checkpoint_ok",
+        std::string((checkpointEnabledBefore && checkpointEnabledAfter) ? "true" : "false"));
     RecordProperty("enabled_reclaim_observed", std::string(enabledReclaimed ? "true" : "false"));
 
     ASSERT_EQ(store->SetShrinkEnable(false), SUCCESS);
     ASSERT_TRUE(WaitShrinkSettled(*impl, false, WAIT_SWITCH_TIMEOUT_MS));
     SleepMillis(NO_DELETE_OBSERVE_MS);
     auto disabledEntries = MakeEntries("toggle_physical_off_", RECLAIM_KEYS_PER_ROUND, RECLAIM_VALUE_SIZE);
-    ASSERT_EQ(store->PutBatch(disabledEntries), SUCCESS);
+    ASSERT_TRUE(PutBatchChunked(store, disabledEntries));
+    bool checkpointDisabledBefore = CheckpointStore(impl);
     SleepMillis(SETTLE_INTERVAL_MS);
     DiskUsage disabledPeak;
     bool disabledMeasuredBefore = QueryStoreDiskUsage(storeId, disabledPeak);
-    ASSERT_EQ(store->DeleteBatch(MakeKeys(disabledEntries)), SUCCESS);
+    ASSERT_TRUE(DeleteBatchChunked(store, MakeKeys(disabledEntries)));
     SleepMillis(NO_DELETE_OBSERVE_MS);
+    bool checkpointDisabledAfter = CheckpointStore(impl);
+    SleepMillis(SETTLE_INTERVAL_MS);
     DiskUsage disabledFinal;
     bool disabledMeasuredAfter = QueryStoreDiskUsage(storeId, disabledFinal);
     bool disabledDropped = disabledMeasuredBefore && disabledMeasuredAfter &&
-        ExceedsHousekeepingDrop(disabledPeak.blockBytes, disabledFinal.blockBytes);
-    RecordProperty("disabled_peak_blocks_bytes", static_cast<int64_t>(disabledPeak.blockBytes));
-    RecordProperty("disabled_final_blocks_bytes", static_cast<int64_t>(disabledFinal.blockBytes));
-    RecordProperty("disabled_drop_percent", DropPercent(disabledPeak.blockBytes, disabledFinal.blockBytes));
+        ExceedsHousekeepingDrop(disabledPeak.dbBlockBytes, disabledFinal.dbBlockBytes);
+    RecordProperty("disabled_peak_blocks_bytes", static_cast<int64_t>(disabledPeak.dbBlockBytes));
+    RecordProperty("disabled_final_blocks_bytes", static_cast<int64_t>(disabledFinal.dbBlockBytes));
+    RecordProperty("disabled_drop_percent", DropPercent(disabledPeak.dbBlockBytes, disabledFinal.dbBlockBytes));
+    RecordProperty("disabled_peak_other_bytes", static_cast<int64_t>(disabledPeak.otherBlockBytes));
+    RecordProperty("disabled_final_other_bytes", static_cast<int64_t>(disabledFinal.otherBlockBytes));
+    RecordProperty("disabled_checkpoint_ok",
+        std::string((checkpointDisabledBefore && checkpointDisabledAfter) ? "true" : "false"));
     RecordProperty("disabled_drop_observed", std::string(disabledDropped ? "true" : "false"));
 
     ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     ASSERT_TRUE(WaitShrinkSettled(*impl, true, WAIT_SWITCH_TIMEOUT_MS));
     auto reenabledEntries = MakeEntries("toggle_physical_again_", RECLAIM_KEYS_PER_ROUND, RECLAIM_VALUE_SIZE);
-    ASSERT_EQ(store->PutBatch(reenabledEntries), SUCCESS);
+    ASSERT_TRUE(PutBatchChunked(store, reenabledEntries));
+    bool checkpointReenabledBefore = CheckpointStore(impl);
     SleepMillis(SETTLE_INTERVAL_MS);
     DiskUsage reenabledPeak;
     bool reenabledMeasured = QueryStoreDiskUsage(storeId, reenabledPeak);
-    ASSERT_EQ(store->DeleteBatch(MakeKeys(reenabledEntries)), SUCCESS);
+    ASSERT_TRUE(DeleteBatchChunked(store, MakeKeys(reenabledEntries)));
+    bool checkpointReenabledAfter = CheckpointStore(impl);
     DiskUsage reenabledFinal;
     bool reenabledReclaimed = false;
     if (reenabledMeasured) {
         auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(WAIT_RECLAIM_TIMEOUT_MS);
         while (std::chrono::steady_clock::now() < deadline) {
             if (QueryStoreDiskUsage(storeId, reenabledFinal) &&
-                HasReclaimDrop(reenabledPeak.blockBytes, reenabledFinal.blockBytes)) {
+                HasReclaimDrop(reenabledPeak.dbBlockBytes, reenabledFinal.dbBlockBytes)) {
                 reenabledReclaimed = true;
                 break;
             }
@@ -807,9 +1161,14 @@ HWTEST_F(EnableShrinkTest, ToggleDuringDeletePhysicalReclaim, TestSize.Level1)
             (void)QueryStoreDiskUsage(storeId, reenabledFinal);
         }
     }
-    RecordProperty("reenabled_peak_blocks_bytes", static_cast<int64_t>(reenabledPeak.blockBytes));
-    RecordProperty("reenabled_final_blocks_bytes", static_cast<int64_t>(reenabledFinal.blockBytes));
-    RecordProperty("reenabled_drop_percent", DropPercent(reenabledPeak.blockBytes, reenabledFinal.blockBytes));
+    RecordProperty("reenabled_peak_blocks_bytes", static_cast<int64_t>(reenabledPeak.dbBlockBytes));
+    RecordProperty("reenabled_final_blocks_bytes", static_cast<int64_t>(reenabledFinal.dbBlockBytes));
+    RecordProperty("reenabled_drop_percent",
+        DropPercent(reenabledPeak.dbBlockBytes, reenabledFinal.dbBlockBytes));
+    RecordProperty("reenabled_peak_other_bytes", static_cast<int64_t>(reenabledPeak.otherBlockBytes));
+    RecordProperty("reenabled_final_other_bytes", static_cast<int64_t>(reenabledFinal.otherBlockBytes));
+    RecordProperty("reenabled_checkpoint_ok",
+        std::string((checkpointReenabledBefore && checkpointReenabledAfter) ? "true" : "false"));
     RecordProperty("reenabled_reclaim_observed", std::string(reenabledReclaimed ? "true" : "false"));
 
     CloseStore(storeId, store);
@@ -818,13 +1177,13 @@ HWTEST_F(EnableShrinkTest, ToggleDuringDeletePhysicalReclaim, TestSize.Level1)
     }
 
     EXPECT_FALSE(disabledDropped) << "physical usage dropped although the switch was disabled (peak="
-        << disabledPeak.blockBytes << ", final=" << disabledFinal.blockBytes << ")";
+        << disabledPeak.dbBlockBytes << ", final=" << disabledFinal.dbBlockBytes << ")";
     EXPECT_TRUE(enabledReclaimed)
-        << "no shrink driven drop observed while enabled (peak=" << enabledPeak.blockBytes
-        << ", final=" << enabledFinal.blockBytes << ")";
+        << "no shrink driven drop observed while enabled (peak=" << enabledPeak.dbBlockBytes
+        << ", final=" << enabledFinal.dbBlockBytes << ")";
     EXPECT_TRUE(reenabledReclaimed)
-        << "no shrink driven drop observed after re-enabling (peak=" << reenabledPeak.blockBytes
-        << ", final=" << reenabledFinal.blockBytes << ")";
+        << "no shrink driven drop observed after re-enabling (peak=" << reenabledPeak.dbBlockBytes
+        << ", final=" << reenabledFinal.dbBlockBytes << ")";
 }
 
 HWTEST_F(EnableShrinkTest, DeleteP95WithShrinkEnabled, TestSize.Level1)
@@ -837,6 +1196,12 @@ HWTEST_F(EnableShrinkTest, DeleteP95WithShrinkEnabled, TestSize.Level1)
     ASSERT_NE(enabled, nullptr);
     auto impl = AsImpl(enabled);
     ASSERT_NE(impl, nullptr);
+    std::string probeReason;
+    if (!ProbeShrinkCapability(impl, probeReason)) {
+        CloseStore(plainId, plain);
+        CloseStore(enabledId, enabled);
+        GTEST_SKIP() << probeReason;
+    }
 
     auto acceptStart = std::chrono::steady_clock::now();
     ASSERT_EQ(enabled->SetShrinkEnable(true), SUCCESS);
@@ -851,6 +1216,7 @@ HWTEST_F(EnableShrinkTest, DeleteP95WithShrinkEnabled, TestSize.Level1)
     std::vector<int64_t> enabledWriteBytesPerSec;
     DiskUsage enabledPeak;
     DiskUsage enabledFinal;
+    bool allCheckpointsOk = true;
 
     for (int32_t round = 0; round < PERF_ROUNDS; ++round) {
         std::string prefix = "perf_" + std::to_string(round) + "_";
@@ -867,16 +1233,18 @@ HWTEST_F(EnableShrinkTest, DeleteP95WithShrinkEnabled, TestSize.Level1)
         int64_t allBytes = static_cast<int64_t>(allEntries.size() * PERF_VALUE_SIZE);
 
         auto plainWriteStart = std::chrono::steady_clock::now();
-        ASSERT_EQ(plain->PutBatch(allEntries), SUCCESS);
+        ASSERT_TRUE(PutBatchChunked(plain, allEntries));
         int64_t plainWriteUs = ElapsedMicros(plainWriteStart);
         auto enabledWriteStart = std::chrono::steady_clock::now();
-        ASSERT_EQ(enabled->PutBatch(allEntries), SUCCESS);
+        ASSERT_TRUE(PutBatchChunked(enabled, allEntries));
         int64_t enabledWriteUs = ElapsedMicros(enabledWriteStart);
         plainWriteBytesPerSec.push_back(plainWriteUs > 0 ? allBytes * 1000000 / plainWriteUs : 0);
         enabledWriteBytesPerSec.push_back(enabledWriteUs > 0 ? allBytes * 1000000 / enabledWriteUs : 0);
         SleepMillis(SETTLE_INTERVAL_MS);
+        allCheckpointsOk = CheckpointStore(impl) && allCheckpointsOk;
+        SleepMillis(SETTLE_INTERVAL_MS);
         DiskUsage written;
-        if (QueryStoreDiskUsage(enabledId, written) && written.blockBytes > enabledPeak.blockBytes) {
+        if (QueryStoreDiskUsage(enabledId, written) && written.dbBlockBytes > enabledPeak.dbBlockBytes) {
             enabledPeak = written;
         }
 
@@ -909,35 +1277,39 @@ HWTEST_F(EnableShrinkTest, DeleteP95WithShrinkEnabled, TestSize.Level1)
                 batchKeys.push_back(batchEntries[begin + index].key);
             }
             auto plainBatchStart = std::chrono::steady_clock::now();
-            EXPECT_EQ(plain->DeleteBatch(batchKeys), SUCCESS);
+            EXPECT_TRUE(DeleteBatchChunked(plain, batchKeys));
             plainBatchSamples.push_back(ElapsedMicros(plainBatchStart));
             auto enabledBatchStart = std::chrono::steady_clock::now();
-            EXPECT_EQ(enabled->DeleteBatch(batchKeys), SUCCESS);
+            EXPECT_TRUE(DeleteBatchChunked(enabled, batchKeys));
             enabledBatchSamples.push_back(ElapsedMicros(enabledBatchStart));
         }
         plainBatchP95s.push_back(Percentile(plainBatchSamples, 95));
         enabledBatchP95s.push_back(Percentile(enabledBatchSamples, 95));
 
         SleepMillis(SETTLE_INTERVAL_MS);
+        allCheckpointsOk = CheckpointStore(impl) && allCheckpointsOk;
+        SleepMillis(SETTLE_INTERVAL_MS);
         DiskUsage afterRound;
         if (QueryStoreDiskUsage(enabledId, afterRound)) {
-            if (!enabledFinal.valid || afterRound.blockBytes < enabledFinal.blockBytes) {
+            if (!enabledFinal.valid || afterRound.dbBlockBytes < enabledFinal.dbBlockBytes) {
                 enabledFinal = afterRound;
             }
         }
     }
 
-    if (enabledPeak.valid) {
+    if (enabledPeak.valid && enabledPeak.dbBlockBytes > 0) {
         auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(WAIT_RECLAIM_TIMEOUT_MS);
         while (true) {
             DiskUsage current;
             if (QueryStoreDiskUsage(enabledId, current) &&
-                (!enabledFinal.valid || current.blockBytes < enabledFinal.blockBytes)) {
+                (!enabledFinal.valid || current.dbBlockBytes < enabledFinal.dbBlockBytes)) {
                 enabledFinal = current;
             }
             int64_t dropped = enabledFinal.valid ?
-                static_cast<int64_t>(enabledPeak.blockBytes) - static_cast<int64_t>(enabledFinal.blockBytes) : 0;
-            if (dropped > 0 && dropped * 100 / static_cast<int64_t>(enabledPeak.blockBytes) >= 10) {
+                static_cast<int64_t>(enabledPeak.dbBlockBytes) -
+                static_cast<int64_t>(enabledFinal.dbBlockBytes) : 0;
+            if (dropped > 0 &&
+                dropped * 100 / static_cast<int64_t>(enabledPeak.dbBlockBytes) >= PERF_RECLAIM_MIN_DROP_PERCENT) {
                 break;
             }
             if (std::chrono::steady_clock::now() >= deadline) {
@@ -958,7 +1330,7 @@ HWTEST_F(EnableShrinkTest, DeleteP95WithShrinkEnabled, TestSize.Level1)
     int64_t batchDegradePercent = plainBatchP95 > 0 ?
         (enabledBatchP95 - plainBatchP95) * 100 / plainBatchP95 : 0;
     int64_t writeDegradePercent = plainWrite > 0 ? (plainWrite - enabledWrite) * 100 / plainWrite : 0;
-    int64_t reclaimDropPercent = DropPercent(enabledPeak.blockBytes, enabledFinal.blockBytes);
+    int64_t reclaimDropPercent = DropPercent(enabledPeak.dbBlockBytes, enabledFinal.dbBlockBytes);
 
     auto disableStart = std::chrono::steady_clock::now();
     Status disableStatus = enabled->SetShrinkEnable(false);
@@ -976,9 +1348,14 @@ HWTEST_F(EnableShrinkTest, DeleteP95WithShrinkEnabled, TestSize.Level1)
     RecordProperty("write_plain_bytes_per_sec", plainWrite);
     RecordProperty("write_enabled_bytes_per_sec", enabledWrite);
     RecordProperty("write_degrade_percent", writeDegradePercent);
-    RecordProperty("enabled_reclaim_peak_bytes", static_cast<int64_t>(enabledPeak.blockBytes));
-    RecordProperty("enabled_reclaim_final_bytes", static_cast<int64_t>(enabledFinal.blockBytes));
+    RecordProperty("enabled_reclaim_peak_bytes", static_cast<int64_t>(enabledPeak.dbBlockBytes));
+    RecordProperty("enabled_reclaim_final_bytes", static_cast<int64_t>(enabledFinal.dbBlockBytes));
+    RecordProperty("enabled_reclaim_peak_other_bytes", static_cast<int64_t>(enabledPeak.otherBlockBytes));
+    RecordProperty("enabled_reclaim_final_other_bytes", static_cast<int64_t>(enabledFinal.otherBlockBytes));
+    RecordProperty("enabled_reclaim_peak_all_bytes", static_cast<int64_t>(enabledPeak.blockBytes));
+    RecordProperty("enabled_reclaim_final_all_bytes", static_cast<int64_t>(enabledFinal.blockBytes));
     RecordProperty("enabled_reclaim_drop_percent", reclaimDropPercent);
+    RecordProperty("perf_checkpoint_ok", std::string(allCheckpointsOk ? "true" : "false"));
 
     EXPECT_EQ(disableStatus, SUCCESS);
     EXPECT_LE(acceptUs, MAX_ACCEPT_MILLIS * 1000);
@@ -986,12 +1363,12 @@ HWTEST_F(EnableShrinkTest, DeleteP95WithShrinkEnabled, TestSize.Level1)
     CloseStore(enabledId, enabled);
     CloseStore(plainId, plain);
 
-    if (!enabledPeak.valid || !enabledFinal.valid) {
+    if (!enabledPeak.valid || !enabledFinal.valid || enabledPeak.dbBlockBytes == 0) {
         GTEST_SKIP() << "evidence gap: the RD database directory of the store is not measurable on this image";
     }
-    EXPECT_GE(reclaimDropPercent, 10)
+    EXPECT_GE(reclaimDropPercent, PERF_RECLAIM_MIN_DROP_PERCENT)
         << "the enabled store did not show engine reclamation during the measured workload (peak="
-        << enabledPeak.blockBytes << ", final=" << enabledFinal.blockBytes << ")";
+        << enabledPeak.dbBlockBytes << ", final=" << enabledFinal.dbBlockBytes << ")";
     int64_t deleteAllowed = std::max(plainDeleteP95 * PERF_DEGRADE_LIMIT_PERCENT / 100, PERF_ABS_JITTER_US);
     int64_t batchAllowed = std::max(plainBatchP95 * PERF_DEGRADE_LIMIT_PERCENT / 100, PERF_ABS_JITTER_US);
     EXPECT_LE(enabledDeleteP95 - plainDeleteP95, deleteAllowed)

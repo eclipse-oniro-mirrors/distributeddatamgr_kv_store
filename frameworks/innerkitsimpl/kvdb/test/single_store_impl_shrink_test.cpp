@@ -64,6 +64,38 @@ bool WaitShrinkSettled(const SingleStoreImpl &store, bool desiredEnabled,
     auto state = TakeShrinkState(store);
     return state.desiredEnabled == desiredEnabled && state.pendingTasks == 0;
 }
+
+bool ProbeShrinkCapability(const std::shared_ptr<SingleStoreImpl> &impl, std::string &reason)
+{
+    if (impl == nullptr || impl->dbStore_ == nullptr) {
+        reason = "shrink capability probe failed: store or delegate is null";
+        return false;
+    }
+
+    DistributedDB::ShrinkParam setParam;
+    setParam.operation = DistributedDB::ShrinkOperation::SET;
+    setParam.enable = false;
+    DistributedDB::PragmaData setData = static_cast<DistributedDB::PragmaData>(&setParam);
+    auto setStatus = impl->dbStore_->Pragma(DistributedDB::SHRINK, setData);
+    if (setStatus != DistributedDB::DBStatus::OK) {
+        reason = "shrink capability SET probe failed, status=" +
+            std::to_string(static_cast<int>(setStatus)) +
+            "; RD library may be missing, the store may have fallen back to SQLite, or shrink symbols are unavailable";
+        return false;
+    }
+
+    DistributedDB::ShrinkParam getParam;
+    getParam.operation = DistributedDB::ShrinkOperation::GET;
+    DistributedDB::PragmaData getData = static_cast<DistributedDB::PragmaData>(&getParam);
+    auto getStatus = impl->dbStore_->Pragma(DistributedDB::SHRINK, getData);
+    if (getStatus != DistributedDB::DBStatus::OK) {
+        reason = "shrink capability GET probe failed, status=" +
+            std::to_string(static_cast<int>(getStatus)) +
+            "; RD library may be missing, the store may have fallen back to SQLite, or shrink symbols are unavailable";
+        return false;
+    }
+    return true;
+}
 }
 
 class SingleStoreImplShrinkTest : public testing::Test {
@@ -211,6 +243,11 @@ HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableDisableBeforeTaskStarts, Test
     ASSERT_NE(store, nullptr);
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
+    std::string probeReason;
+    if (!ProbeShrinkCapability(impl, probeReason)) {
+        CloseStore("ToggleShrinkStore", store);
+        GTEST_SKIP() << probeReason;
+    }
     EXPECT_EQ(store->SetShrinkEnable(true), SUCCESS);
     EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
     EXPECT_TRUE(WaitShrinkSettled(*impl, false));

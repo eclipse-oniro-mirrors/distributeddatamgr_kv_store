@@ -1653,10 +1653,13 @@ HWTEST_F(SingleStoreImplMockTest, SetShrinkEnableAsyncAndDedupe, testing::ext::T
     ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     ASSERT_TRUE(delegate->WaitSetCalls(1));
     ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    auto dedupeState = GetShrinkState(store);
+    EXPECT_EQ(dedupeState.pending, 1u);
     EXPECT_EQ(delegate->setCalls_.load(), 1);
     delegate->ReleaseSet();
     ASSERT_TRUE(delegate->WaitActual(true));
     ASSERT_TRUE(WaitShrinkState(store, true, 0));
+    EXPECT_EQ(delegate->setCalls_.load(), 1);
     ASSERT_EQ(store->SetShrinkEnable(false), SUCCESS);
     ASSERT_TRUE(delegate->WaitSetCalls(2));
     ASSERT_TRUE(delegate->WaitActual(false));
