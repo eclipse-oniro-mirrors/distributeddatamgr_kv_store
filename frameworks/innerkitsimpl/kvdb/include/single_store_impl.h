@@ -82,6 +82,10 @@ public:
         std::map<std::string, DistributedKv::Status> &status) override;
     Status Rekey() override;
     Status SetShrinkEnable(bool enable) override;
+    // Internal: actual engine capability determined at open time (StoreFactory).
+    void SetShrinkSupported(bool supported);
+    // Test/diagnostics only: snapshot of ShrinkManager state.
+    void GetShrinkStateForTest(bool &desiredEnabled, uint32_t &pendingTasks) const;
     void OnRemoteDied() override;
     bool IsRebuild() override;
     // normal function
@@ -173,6 +177,11 @@ private:
     std::mutex notifyMutex_;
     uint64_t notifyExpiredTime_ = 0;
     std::shared_ptr<DBStore> dbStore_ = nullptr;
+    // Serializes the SetDesired()/ScheduleShrink() pair of this wrapper: task enqueue order must follow
+    // the desired-value order, otherwise two concurrent toggles could cancel the newest task.
+    std::mutex shrinkTaskMutex_;
+    std::atomic<ExecutorPool::TaskId> shrinkTaskId_{ ExecutorPool::INVALID_TASK_ID };
+    bool shrinkSupported_ = false;
     ShrinkManager shrinkManager_;
     std::shared_ptr<SyncObserver> syncObserver_ = nullptr;
     ConcurrentMap<uintptr_t, std::pair<uint32_t, std::shared_ptr<ObserverBridge>>> observers_;

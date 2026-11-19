@@ -15,6 +15,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <sys/types.h>
@@ -47,6 +48,37 @@ static AppId appId = { "rekey" };
 
 namespace {
 constexpr int WAIT_POLL_INTERVAL_MS = 10;
+constexpr int SHRINK_WAIT_TIMEOUT_MS = 5000;
+
+struct ShrinkState {
+    bool desired = true;
+    uint32_t pending = 0;
+};
+
+ShrinkState GetShrinkState(const std::shared_ptr<SingleStoreImpl> &store)
+{
+    ShrinkState state{};
+    store->GetShrinkStateForTest(state.desired, state.pending);
+    return state;
+}
+
+// Predicate-based wait on the manager snapshot exposed by GetShrinkStateForTest(): a store has
+// settled when its desired value and pending task count reach the expected values.
+bool WaitShrinkState(const std::shared_ptr<SingleStoreImpl> &store, bool desired, uint32_t pending,
+    std::chrono::milliseconds timeout = std::chrono::milliseconds(SHRINK_WAIT_TIMEOUT_MS))
+{
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (true) {
+        auto state = GetShrinkState(store);
+        if (state.desired == desired && state.pending == pending) {
+            return true;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_POLL_INTERVAL_MS));
+    }
+}
 } // namespace
 
 // Scriptable delegate that records the asynchronous SET switch calls of one store. The GET branch
@@ -152,6 +184,27 @@ public:
         setGateCondition_.notify_all();
     }
 
+    // Blocks only the SET calls that carry the scripted value, so the opposite value can still be
+    // applied while one engine SET of this store stays in flight.
+    void BlockSetOnValue(bool enable)
+    {
+        {
+            std::lock_guard<std::mutex> lock(setGateMutex_);
+            blockValueSet_ = true;
+            blockValue_ = enable;
+        }
+        setGateCondition_.notify_all();
+    }
+
+    void ReleaseSetValue()
+    {
+        {
+            std::lock_guard<std::mutex> lock(setGateMutex_);
+            blockValueSet_ = false;
+        }
+        setGateCondition_.notify_all();
+    }
+
     bool WaitActual(bool expected, std::chrono::milliseconds timeout = std::chrono::seconds(5))
     {
         auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -184,7 +237,7 @@ private:
     DBStatus HandleSet(bool enable)
     {
         setCalls_++;
-        WaitSetGate();
+        WaitSetGate(enable);
         if (setFailures_.load() > 0) {
             setFailures_--;
             // A failed engine SET; the store wrapper logs/DFX-reports it and never schedules again.
@@ -194,10 +247,13 @@ private:
         return DBStatus::OK;
     }
 
-    void WaitSetGate()
+    void WaitSetGate(bool enable)
     {
         std::unique_lock<std::mutex> lock(setGateMutex_);
-        setGateCondition_.wait(lock, [this] { return !blockSet_; });
+        setGateCondition_.wait(lock, [this, enable] {
+            // The predicate observes both gates: the global block and the per-value block.
+            return !blockSet_ && !(blockValueSet_ && blockValue_ == enable);
+        });
     }
 
     DBStatus HandleGet(bool &enable)
@@ -211,6 +267,8 @@ private:
     std::mutex setGateMutex_;
     std::condition_variable setGateCondition_;
     bool blockSet_ = false;
+    bool blockValueSet_ = false;
+    bool blockValue_ = false;
 };
 
 std::shared_ptr<SingleStoreImpl> CreateShrinkStore(const std::shared_ptr<ShrinkMockDelegate> &delegate,
@@ -1652,8 +1710,9 @@ HWTEST_F(SingleStoreImplMockTest, SetShrinkEnableAsyncSetOnly, testing::ext::Tes
 
 /**
  * @tc.name: SetShrinkEnableSameDesiredNotEnqueuedTwice
- * @tc.desc: A repeated request for the same value while the manager still has that value scheduled
- *           returns SUCCESS without enqueueing another task.
+ * @tc.desc: A repeated request for the same value while a task carrying that value is still pending
+ *           returns SUCCESS without enqueueing another task. Older versions cleared the schedule flag
+ *           on every Finish(), so this request was enqueued again (S5).
  * @tc.type: FUNC
  */
 HWTEST_F(SingleStoreImplMockTest, SetShrinkEnableSameDesiredNotEnqueuedTwice, testing::ext::TestSize.Level1)
@@ -1665,7 +1724,8 @@ HWTEST_F(SingleStoreImplMockTest, SetShrinkEnableSameDesiredNotEnqueuedTwice, te
     delegate->BlockSet();
 
     ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
-    // The first task is inside the engine SET call, so the same desired value stays scheduled.
+    // The first task is inside the engine SET call, so its value is still pending and the same
+    // request is deduplicated.
     ASSERT_TRUE(delegate->WaitSetCalls(1));
     ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     delegate->ReleaseSet();
@@ -1704,5 +1764,301 @@ HWTEST_F(SingleStoreImplMockTest, ShrinkFailureDoesNotRetry, testing::ext::TestS
     EXPECT_EQ(delegate->getCalls_.load(), 0);
     EXPECT_FALSE(delegate->actual_.load());
     EXPECT_EQ(store->Close(true), 0);
+}
+
+/**
+ * @tc.name: SetShrinkSupportedFalseRejectsEnable
+ * @tc.desc: When the opened engine is not shrink-capable (SQLite fallback detected by StoreFactory),
+ *           enable returns NOT_SUPPORT without scheduling anything, while disable stays an
+ *           idempotent SUCCESS no-op. ALREADY_CLOSED still takes priority over the capability gate.
+ * @tc.type: FUNC
+ */
+HWTEST_F(SingleStoreImplMockTest, SetShrinkSupportedFalseRejectsEnable, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    // Directly constructed LOCAL_ONLY stores are optimistic; simulate the SQLite fallback probe.
+    store->SetShrinkSupported(false);
+
+    // A store without capability rejects enable and treats disable as an accepted no-op.
+    ASSERT_EQ(store->SetShrinkEnable(true), NOT_SUPPORT);
+    ASSERT_EQ(store->SetShrinkEnable(false), SUCCESS);
+
+    // Neither call may enqueue a task, so the engine is never touched.
+    auto state = GetShrinkState(store);
+    EXPECT_FALSE(state.desired);
+    EXPECT_EQ(state.pending, 0U);
+    EXPECT_EQ(delegate->setCalls_.load(), 0);
+
+    // ALREADY_CLOSED is evaluated before the capability gate.
+    ASSERT_EQ(store->Close(true), 0);
+    EXPECT_EQ(store->SetShrinkEnable(true), ALREADY_CLOSED);
+    EXPECT_EQ(delegate->setCalls_.load(), 0);
+}
+
+/**
+ * @tc.name: FirstDisableSendsSafetySync
+ * @tc.desc: A brand-new wrapper is already disabled, but the first disable still schedules one
+ *           idempotent SET(false) as a safety sync (A1): it can heal an engine instance left enabled
+ *           by an earlier wrapper lifetime. The task finishes without leaving a pending record and a
+ *           later enable works normally.
+ * @tc.type: FUNC
+ */
+HWTEST_F(SingleStoreImplMockTest, FirstDisableSendsSafetySync, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+
+    // The first disable reaches the engine exactly once; SET(false) is idempotent for a disabled store.
+    ASSERT_EQ(store->SetShrinkEnable(false), SUCCESS);
+    ASSERT_TRUE(delegate->WaitSetCalls(1));
+    ASSERT_TRUE(WaitShrinkState(store, false, 0));
+    EXPECT_EQ(delegate->setCalls_.load(), 1);
+    EXPECT_FALSE(delegate->actual_.load());
+    auto state = GetShrinkState(store);
+    EXPECT_FALSE(state.desired);
+    EXPECT_EQ(state.pending, 0U);
+
+    // The enable is a changed value: exactly one further SET is scheduled and applied.
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    ASSERT_TRUE(delegate->WaitSetCalls(2));
+    ASSERT_TRUE(WaitShrinkState(store, true, 0));
+    EXPECT_EQ(delegate->setCalls_.load(), 2);
+    EXPECT_TRUE(delegate->actual_.load());
+    EXPECT_EQ(store->Close(true), 0);
+}
+
+/**
+ * @tc.name: DuplicateValueWhilePreviousTaskRunning
+ * @tc.desc: A repeated request for the same desired value while the previous task of that value is
+ *           still pending is deduplicated (S5): no second engine SET is queued while the task is in
+ *           flight, and the final engine state matches the last request.
+ * @tc.type: FUNC
+ */
+HWTEST_F(SingleStoreImplMockTest, DuplicateValueWhilePreviousTaskRunning, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    // Task T (enable) stays in flight inside the engine call.
+    delegate->BlockSetOnValue(true);
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    ASSERT_TRUE(delegate->WaitSetCalls(1));
+
+    // While T is still running, the disable request U is queued behind it (changed value).
+    ASSERT_EQ(store->SetShrinkEnable(false), SUCCESS);
+
+    // Switch the value gate to false: T finishes (the older Finish that used to clear the schedule
+    // flag in the buggy implementation) and U starts, then blocks inside its engine call.
+    delegate->BlockSetOnValue(false);
+    ASSERT_TRUE(delegate->WaitSetCalls(2));
+
+    // The same value requested again while U is pending must not be enqueued twice (S5 dedupe).
+    ASSERT_EQ(store->SetShrinkEnable(false), SUCCESS);
+    auto state = GetShrinkState(store);
+    EXPECT_FALSE(state.desired);
+    EXPECT_EQ(state.pending, 1U);
+    EXPECT_EQ(delegate->setCalls_.load(), 2);
+
+    delegate->ReleaseSetValue();
+    ASSERT_TRUE(WaitShrinkState(store, false, 0));
+    EXPECT_EQ(delegate->setCalls_.load(), 2);
+    EXPECT_FALSE(delegate->actual_.load());
+    EXPECT_EQ(store->Close(true), 0);
+}
+
+/**
+ * @tc.name: CloseWaitsInflightSet
+ * @tc.desc: Close takes the exclusive lock and therefore waits for an in-flight engine SET. The
+ *           negative half uses a bounded condition-variable wait; the positive half releases the
+ *           engine call and checks that Close then completes.
+ * @tc.type: FUNC
+ */
+HWTEST_F(SingleStoreImplMockTest, CloseWaitsInflightSet, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    delegate->BlockSet();
+
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    ASSERT_TRUE(delegate->WaitSetCalls(1));
+
+    std::mutex closeMutex;
+    std::condition_variable closeCondition;
+    bool closeReturned = false;
+    int32_t closeResult = -1;
+    std::thread closer([store, &closeMutex, &closeCondition, &closeReturned, &closeResult]() {
+        int32_t result = store->Close(true);
+        {
+            std::lock_guard<std::mutex> lock(closeMutex);
+            closeResult = result;
+            closeReturned = true;
+        }
+        closeCondition.notify_all();
+    });
+
+    // The in-flight SET holds the shared lock, so Close cannot complete while it is blocked.
+    {
+        std::unique_lock<std::mutex> lock(closeMutex);
+        bool returnedEarly = closeCondition.wait_for(lock, std::chrono::milliseconds(100),
+            [&closeReturned]() { return closeReturned; });
+        EXPECT_FALSE(returnedEarly);
+    }
+
+    delegate->ReleaseSet();
+    {
+        std::unique_lock<std::mutex> lock(closeMutex);
+        EXPECT_TRUE(closeCondition.wait_for(lock, std::chrono::seconds(5),
+            [&closeReturned]() { return closeReturned; }));
+    }
+    closer.join();
+    EXPECT_EQ(closeResult, 0);
+}
+
+/**
+ * @tc.name: K1MergeNotYetStarted
+ * @tc.desc: K1 merge: while one engine SET is in flight, every older not-yet-started task of the
+ *           store is removed and its pending record is released; only the newest desired value is
+ *           applied afterwards. Five toggle requests therefore yield a bounded number of SETs and
+ *           the final engine state is the last requested value. A scope guard releases the blocked
+ *           SET gate and closes the store on every exit path, including a failed ASSERT, so a parked
+ *           task cannot occupy the process-wide single-threaded shrink pool and hang later tests.
+ * @tc.type: FUNC
+ */
+HWTEST_F(SingleStoreImplMockTest, K1MergeNotYetStarted, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    // Scope guard (A9): even when an ASSERT returns early, release the blocked SET gate first and
+    // close the store, otherwise a task parked in the process-wide single-threaded shrink pool could
+    // hang the remaining tests or the process exit.
+    struct K1Cleanup {
+        K1Cleanup(ShrinkMockDelegate &setDelegate, SingleStoreImpl &setStore)
+            : delegate(setDelegate), store(setStore) {}
+        ~K1Cleanup()
+        {
+            if (!armed) {
+                return;
+            }
+            delegate.ReleaseSetValue();
+            (void)store.Close(true);
+        }
+        int32_t Close()
+        {
+            armed = false;
+            return store.Close(true);
+        }
+        ShrinkMockDelegate &delegate;
+        SingleStoreImpl &store;
+        bool armed = true;
+    } cleanup(*delegate, *store);
+    delegate->BlockSetOnValue(true);
+
+    // The enable task starts and stays blocked inside the engine call.
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    ASSERT_TRUE(delegate->WaitSetCalls(1));
+
+    // The toggles queue tasks behind the running one; each new task removes the previous queued
+    // task of this store (its pending record is finished by ScheduleShrink).
+    ASSERT_EQ(store->SetShrinkEnable(false), SUCCESS);
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    ASSERT_EQ(store->SetShrinkEnable(false), SUCCESS);
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    // The running task and the newest queued task are the only remaining pending records.
+    auto state = GetShrinkState(store);
+    EXPECT_TRUE(state.desired);
+    EXPECT_EQ(state.pending, 2U);
+
+    delegate->ReleaseSetValue();
+    ASSERT_TRUE(WaitShrinkState(store, true, 0));
+    // Only the running task and the last requested task are applied (deterministically 2 SETs;
+    // the contract only requires the merged count to be bounded by the request count).
+    EXPECT_GE(delegate->setCalls_.load(), 2);
+    EXPECT_LE(delegate->setCalls_.load(), 3);
+    EXPECT_TRUE(delegate->actual_.load());
+    EXPECT_EQ(cleanup.Close(), 0);
+}
+
+/**
+ * @tc.name: DisableSkipsNotStartedTask
+ * @tc.desc: A queued enable task that has not started must not call the engine after a disable
+ *           supersedes it (AC-1.8). The single-thread shrink pool is occupied by another store, so
+ *           the target's enable task is deterministically still queued when the disable arrives.
+ *           The mock delegate counts engine SET calls: executing the stale task would produce two
+ *           SET calls (true then false); the correct behavior produces exactly one SET(false).
+ * @tc.type: FUNC
+ */
+HWTEST_F(SingleStoreImplMockTest, DisableSkipsNotStartedTask, testing::ext::TestSize.Level1)
+{
+    auto blockerDelegate = std::make_shared<ShrinkMockDelegate>();
+    auto targetDelegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto blocker = CreateShrinkStore(blockerDelegate, convertor);
+    auto target = CreateShrinkStore(targetDelegate, convertor);
+    ASSERT_NE(blocker, nullptr);
+    ASSERT_NE(target, nullptr);
+    // Scope guard: on early return, unblock the only shrink worker before closing the stores, so a
+    // parked engine call cannot occupy the process-wide single-thread pool and hang later tests.
+    struct NotStartedCleanup {
+        NotStartedCleanup(ShrinkMockDelegate &setBlockerDelegate, SingleStoreImpl &setBlockerStore,
+            SingleStoreImpl &setTargetStore)
+            : blockerDelegate(setBlockerDelegate), blockerStore(setBlockerStore), targetStore(setTargetStore) {}
+        ~NotStartedCleanup()
+        {
+            if (!armed) {
+                return;
+            }
+            blockerDelegate.ReleaseSetValue();
+            (void)blockerStore.Close(true);
+            (void)targetStore.Close(true);
+        }
+        int32_t Close()
+        {
+            armed = false;
+            (void)blockerStore.Close(true);
+            return targetStore.Close(true);
+        }
+        ShrinkMockDelegate &blockerDelegate;
+        SingleStoreImpl &blockerStore;
+        SingleStoreImpl &targetStore;
+        bool armed = true;
+    } cleanup(*blockerDelegate, *blocker, *target);
+
+    // Occupy the only shrink worker: the blocker's engine SET stays in flight, so every task
+    // scheduled afterwards remains queued and cannot start.
+    blockerDelegate->BlockSetOnValue(true);
+    ASSERT_EQ(blocker->SetShrinkEnable(true), SUCCESS);
+    ASSERT_TRUE(blockerDelegate->WaitSetCalls(1));
+
+    // The target's enable task is queued (the worker is busy) and has not reached the engine.
+    ASSERT_EQ(target->SetShrinkEnable(true), SUCCESS);
+    // The disable supersedes the queued enable task; the scheduler must drop/merge it.
+    ASSERT_EQ(target->SetShrinkEnable(false), SUCCESS);
+    auto queuedState = GetShrinkState(target);
+    EXPECT_FALSE(queuedState.desired);
+    EXPECT_EQ(queuedState.pending, 1U);
+
+    // Release the blocker; the target's remaining (disable) task may now run.
+    blockerDelegate->ReleaseSetValue();
+    ASSERT_TRUE(blockerDelegate->WaitActual(true));
+    ASSERT_TRUE(WaitShrinkState(target, false, 0));
+
+    // The stale enable task never reached the engine: exactly one SET, and it is disable.
+    EXPECT_EQ(targetDelegate->setCalls_.load(), 1);
+    EXPECT_FALSE(targetDelegate->actual_.load());
+    EXPECT_EQ(targetDelegate->getCalls_.load(), 0);
+    auto settled = GetShrinkState(target);
+    EXPECT_FALSE(settled.desired);
+    EXPECT_EQ(settled.pending, 0U);
+    EXPECT_EQ(cleanup.Close(), 0);
 }
 } // namespace OHOS::DistributedKv

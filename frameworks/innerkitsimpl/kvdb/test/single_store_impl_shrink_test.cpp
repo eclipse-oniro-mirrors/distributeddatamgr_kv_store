@@ -18,8 +18,8 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -35,37 +35,40 @@ namespace OHOS::Test {
 namespace {
 constexpr const char *BASE_DIR = "/data/service/el1/public/database/SingleStoreImplTest";
 constexpr const char *APP_ID = "SingleStoreImplTest";
+constexpr int64_t WAIT_POLL_INTERVAL_MS = 10;
 
-struct ShrinkManagerSnapshot {
+struct ShrinkState {
     bool desiredEnabled = false;
-    bool shrinkScheduled = false;
+    uint32_t pendingTasks = 0;
 };
 
-// The manager fields are guarded by ShrinkManager::stateMutex_; the asynchronous switch task can
-// call Finish concurrently, so tests take a locked snapshot instead of reading the fields directly.
-ShrinkManagerSnapshot TakeShrinkManagerSnapshot(SingleStoreImpl &store)
+// SingleStoreImpl::GetShrinkStateForTest returns a locked snapshot of the ShrinkManager state; the
+// asynchronous switch task can call Finish concurrently, so tests take that snapshot instead of
+// reading the manager fields directly. pendingTasks == 0 means no switch task is queued or running.
+ShrinkState TakeShrinkState(const SingleStoreImpl &store)
 {
-    ShrinkManager &manager = store.shrinkManager_;
-    std::lock_guard<std::mutex> lock(manager.stateMutex_);
-    return { manager.desiredEnabled_, manager.shrinkScheduled_ };
+    ShrinkState state;
+    store.GetShrinkStateForTest(state.desiredEnabled, state.pendingTasks);
+    return state;
 }
 
-// Waits until the manager has the expected desired value and no scheduled task. The store engine
-// is never queried here: the switch task only reports acceptance, and the manager state is the
-// observable contract of the store wrapper.
-bool WaitShrinkManagerIdle(SingleStoreImpl &store, bool desiredEnabled,
+// Bounded wait until the wrapper has the expected desired value and no unfinished switch task. The
+// engine is never queried here: the switch task only reports acceptance, and the wrapper state is
+// the observable contract. The polling interval only keeps the loop cheap; it is not used as the
+// sole synchronization.
+bool WaitShrinkSettled(const SingleStoreImpl &store, bool desiredEnabled,
     std::chrono::milliseconds timeout = std::chrono::seconds(5))
 {
     auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
-        auto snapshot = TakeShrinkManagerSnapshot(store);
-        if (snapshot.desiredEnabled == desiredEnabled && !snapshot.shrinkScheduled) {
+        auto state = TakeShrinkState(store);
+        if (state.desiredEnabled == desiredEnabled && state.pendingTasks == 0) {
             return true;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_POLL_INTERVAL_MS));
     }
-    auto snapshot = TakeShrinkManagerSnapshot(store);
-    return snapshot.desiredEnabled == desiredEnabled && !snapshot.shrinkScheduled;
+    auto state = TakeShrinkState(store);
+    return state.desiredEnabled == desiredEnabled && state.pendingTasks == 0;
 }
 } // namespace
 
@@ -146,6 +149,42 @@ HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableSQLiteNotSupported, TestSize.
     ASSERT_NE(kvStore_, nullptr);
     EXPECT_EQ(kvStore_->SetShrinkEnable(true), NOT_SUPPORT);
     EXPECT_EQ(kvStore_->SetShrinkEnable(false), SUCCESS);
+    auto impl = AsImpl(kvStore_);
+    ASSERT_NE(impl, nullptr);
+    // A store without shrink capability creates no task: the state stays disabled and idle (S2).
+    auto state = TakeShrinkState(*impl);
+    EXPECT_FALSE(state.desiredEnabled);
+    EXPECT_EQ(state.pendingTasks, 0u);
+}
+
+/**
+ * @tc.name: SetShrinkEnableCapabilityBit
+ * @tc.desc: When the open path reports no shrink capable engine (for example LOCAL_ONLY opened on
+ *           the SQLite fallback), enable is denied with NOT_SUPPORT and creates no task, while
+ *           disable stays an idempotent SUCCESS no-op (S2/C1).
+ * @tc.type: FUNC
+ */
+HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableCapabilityBit, TestSize.Level1)
+{
+    auto store = CreateStore("CapabilityShrinkStore", KvStoreType::LOCAL_ONLY);
+    ASSERT_NE(store, nullptr);
+    auto impl = AsImpl(store);
+    ASSERT_NE(impl, nullptr);
+    // SetShrinkSupported is the internal hook the open path uses to publish the probed engine
+    // capability; overriding it models the SQLite fallback deterministically on any image.
+    impl->SetShrinkSupported(false);
+    EXPECT_EQ(store->SetShrinkEnable(true), NOT_SUPPORT);
+    EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
+    auto state = TakeShrinkState(*impl);
+    EXPECT_FALSE(state.desiredEnabled);
+    EXPECT_EQ(state.pendingTasks, 0u);
+
+    // The refusal is stable and never leaves a pending record behind that could swallow a retry.
+    EXPECT_EQ(store->SetShrinkEnable(true), NOT_SUPPORT);
+    auto retryState = TakeShrinkState(*impl);
+    EXPECT_FALSE(retryState.desiredEnabled);
+    EXPECT_EQ(retryState.pendingTasks, 0u);
+    CloseStore("CapabilityShrinkStore", store);
 }
 
 /**
@@ -159,6 +198,11 @@ HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableDeviceNotSupported, TestSize.
     ASSERT_NE(store, nullptr);
     EXPECT_EQ(store->SetShrinkEnable(true), NOT_SUPPORT);
     EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
+    auto impl = AsImpl(store);
+    ASSERT_NE(impl, nullptr);
+    auto state = TakeShrinkState(*impl);
+    EXPECT_FALSE(state.desiredEnabled);
+    EXPECT_EQ(state.pendingTasks, 0u);
     CloseStore("DeviceShrinkStore", store);
 }
 
@@ -199,10 +243,19 @@ HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableLocalOnlyAccepted, TestSize.L
 {
     auto store = CreateStore("LocalOnlyShrinkStore", KvStoreType::LOCAL_ONLY);
     ASSERT_NE(store, nullptr);
+    auto impl = AsImpl(store);
+    ASSERT_NE(impl, nullptr);
     EXPECT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    // Repeated identical requests stay SUCCESS: they are deduplicated while a task with the same
+    // value is pending, or accepted as an explicit re-request once it finished (S5/C2).
     EXPECT_EQ(store->SetShrinkEnable(true), SUCCESS);
     EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
     EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
+    // Only convergence is asserted; the exact number of executed SET calls depends on scheduling.
+    EXPECT_TRUE(WaitShrinkSettled(*impl, false));
+    auto state = TakeShrinkState(*impl);
+    EXPECT_FALSE(state.desiredEnabled);
+    EXPECT_EQ(state.pendingTasks, 0u);
     CloseStore("LocalOnlyShrinkStore", store);
 }
 
@@ -223,23 +276,26 @@ HWTEST_F(SingleStoreImplShrinkTest, DeleteDoesNotDriveShrinkManager, TestSize.Le
     }
 
     ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
-    auto before = TakeShrinkManagerSnapshot(*impl);
+    auto before = TakeShrinkState(*impl);
     EXPECT_TRUE(before.desiredEnabled);
     ASSERT_EQ(store->Delete(Key("shrink_delete_0")), SUCCESS);
     std::vector<Key> keys = { Key("shrink_delete_1"), Key("shrink_delete_2") };
     ASSERT_EQ(store->DeleteBatch(keys), SUCCESS);
-    // Delete/DeleteBatch never read or update the switch state. The asynchronous task may clear
-    // shrinkScheduled_ concurrently, so only the stable desired value is compared.
-    auto after = TakeShrinkManagerSnapshot(*impl);
+    // Delete/DeleteBatch never read or update the switch state. The asynchronous task may call
+    // Finish concurrently and decrease pendingTasks, so only the stable desired value and a
+    // non-increasing count are compared.
+    auto after = TakeShrinkState(*impl);
     EXPECT_EQ(after.desiredEnabled, before.desiredEnabled);
+    EXPECT_LE(after.pendingTasks, before.pendingTasks);
     EXPECT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    EXPECT_TRUE(WaitShrinkSettled(*impl, true));
     CloseStore("DeleteShrinkStore", store);
 }
 
 /**
  * @tc.name: SetShrinkEnableDisableBeforeTaskStarts
- * @tc.desc: A back-to-back disable replaces the queued enable request; the final desired state is
- *           disabled and the scheduled state converges to idle without querying the engine.
+ * @tc.desc: A back-to-back disable supersedes the queued enable request; the final desired state is
+ *           disabled and the wrapper converges to idle without any pending switch task.
  * @tc.type: FUNC
  */
 HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableDisableBeforeTaskStarts, TestSize.Level1)
@@ -250,11 +306,14 @@ HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableDisableBeforeTaskStarts, Test
     ASSERT_NE(impl, nullptr);
     EXPECT_EQ(store->SetShrinkEnable(true), SUCCESS);
     EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
-    EXPECT_TRUE(WaitShrinkManagerIdle(*impl, false));
-    auto snapshot = TakeShrinkManagerSnapshot(*impl);
+    EXPECT_TRUE(WaitShrinkSettled(*impl, false));
+    auto snapshot = TakeShrinkState(*impl);
     EXPECT_FALSE(snapshot.desiredEnabled);
-    EXPECT_FALSE(snapshot.shrinkScheduled);
+    EXPECT_EQ(snapshot.pendingTasks, 0u);
+    // A same-value disable after the toggle settled is an explicit re-request (C2): it may enqueue
+    // one deduplicated SET(false) task, so wait for the wrapper to settle again before closing.
     EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
+    EXPECT_TRUE(WaitShrinkSettled(*impl, false));
     CloseStore("ToggleShrinkStore", store);
 }
 } // namespace OHOS::Test

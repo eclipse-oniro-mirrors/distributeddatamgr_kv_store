@@ -16,6 +16,7 @@
 #ifndef GRD_KV_API_H
 #define GRD_KV_API_H
 
+#include <stdbool.h>
 #include <cstdint>
 
 #include "grd_base/grd_resultset_api.h"

@@ -43,6 +43,21 @@ ExecutorPool &GetShrinkExecutorPool()
     static ExecutorPool pool(1, 1, "KVDB_Shrink");
     return pool;
 }
+
+// Releases the pending record of one scheduled ShrinkManager task on every return path of RunShrink.
+class ShrinkFinishGuard {
+public:
+    explicit ShrinkFinishGuard(ShrinkManager &manager) : manager_(manager) {}
+    ~ShrinkFinishGuard()
+    {
+        manager_.Finish();
+    }
+    ShrinkFinishGuard(const ShrinkFinishGuard &) = delete;
+    ShrinkFinishGuard &operator=(const ShrinkFinishGuard &) = delete;
+
+private:
+    ShrinkManager &manager_;
+};
 } // namespace
 
 SingleStoreImpl::SingleStoreImpl(
@@ -58,6 +73,9 @@ SingleStoreImpl::SingleStoreImpl(
     isClientSync_ = options.isClientSync;
     syncObserver_ = std::make_shared<SyncObserver>();
     kvStoreType_ = options.kvStoreType;
+    // Directly constructed stores keep the historical type-based behavior; StoreFactory overrides this
+    // with the engine capability actually selected at open time (SQLite fallback reports false).
+    shrinkSupported_ = (kvStoreType_ == KvStoreType::LOCAL_ONLY);
     dataType_ = options.dataType;
     encrypt_ = options.encrypt;
     securityLevel_ = options.securityLevel;
@@ -799,6 +817,17 @@ int32_t SingleStoreImpl::Close(bool isForce)
     observers_.Clear();
     // Invalidate queued tasks before releasing the delegate; active tasks hold a shared lock.
     shrinkManager_.Invalidate();
+    // Drop the last not-yet-started task from the shared pool so Close leaves no work behind.
+    // RemovePending() is true only for a task that is guaranteed not to run, and Invalidate() already
+    // cleared the pending count, so no Finish() is needed here; a task that already started releases its
+    // own record through the RunShrink guard.
+    {
+        std::lock_guard<std::mutex> shrinkLock(shrinkTaskMutex_);
+        auto oldTaskId = shrinkTaskId_.exchange(ExecutorPool::INVALID_TASK_ID);
+        if (oldTaskId != ExecutorPool::INVALID_TASK_ID) {
+            (void)GetShrinkExecutorPool().RemovePending(oldTaskId);
+        }
+    }
     dbStore_ = nullptr;
     return ref_;
 }
@@ -921,23 +950,30 @@ Status SingleStoreImpl::SetShrinkEnable(bool enable)
         ZLOGE("db:%{public}s already closed!", StoreUtil::Anonymous(storeId_).c_str());
         return ALREADY_CLOSED;
     }
-    if (kvStoreType_ != KvStoreType::LOCAL_ONLY) {
+    if (!shrinkSupported_) {
         if (!enable) {
-            // An unsupported store has no shrink task to cancel; disable stays an idempotent no-op.
+            // A store without shrink capability has no task to cancel; disable stays an idempotent no-op.
             return SUCCESS;
         }
         ZLOGI("shrink is not supported, type:%{public}d store:%{public}s",
             static_cast<int32_t>(kvStoreType_), StoreUtil::Anonymous(storeId_).c_str());
         return NOT_SUPPORT;
     }
-    if (shrinkManager_.SetDesired(enable)) {
-        ScheduleShrink(enable);
+    // Keep SetDesired() and the scheduling that follows it atomic per store: if two toggles were allowed
+    // to interleave between these two steps, the later scheduling could cancel the task that carries the
+    // newer desired value (lost toggle).
+    {
+        std::lock_guard<std::mutex> shrinkLock(shrinkTaskMutex_);
+        if (shrinkManager_.SetDesired(enable)) {
+            ScheduleShrink(enable);
+        }
     }
     ZLOGI("shrink switch accepted, enable:%{public}d store:%{public}s", enable,
         StoreUtil::Anonymous(storeId_).c_str());
     return SUCCESS;
 }
 
+// The caller must hold shrinkTaskMutex_.
 Status SingleStoreImpl::ScheduleShrink(bool enable)
 {
     auto weakSelf = weak_from_this();
@@ -949,33 +985,75 @@ Status SingleStoreImpl::ScheduleShrink(bool enable)
     };
     auto taskId = GetShrinkExecutorPool().Execute(std::move(task));
     if (taskId == ExecutorPool::INVALID_TASK_ID) {
-        // The static shrink pool only stops while the process is exiting; keep best-effort semantics.
+        // The static shrink pool only stops while the process is exiting; keep best-effort semantics, but
+        // roll back the pending record or every later same-value request would be deduplicated forever.
         ZLOGE("schedule shrink switch failed, store:%{public}s", StoreUtil::Anonymous(storeId_).c_str());
+        shrinkManager_.Finish();
+        return SUCCESS;
+    }
+    // Merge the not-yet-started task of this store: the newest desired value supersedes the previous
+    // scheduled task, so a slow engine call cannot make the global pool accumulate stale tasks.
+    auto previous = shrinkTaskId_.exchange(taskId);
+    if (previous != ExecutorPool::INVALID_TASK_ID && GetShrinkExecutorPool().RemovePending(previous)) {
+        // RemovePending() is true only when the previous task was still waiting and has been removed, so
+        // it is guaranteed not to run and its pending record is rolled back here. If it returns false the
+        // task may already be running; RunShrink() then releases its own record through the finish guard.
+        shrinkManager_.Finish();
     }
     return SUCCESS;
 }
 
 void SingleStoreImpl::RunShrink(bool enable)
 {
+    // Every enqueued task owns exactly one pending record and must release it on every return path,
+    // including "store already closed" and "request superseded by a newer desired value".
+    ShrinkFinishGuard finishGuard(shrinkManager_);
     // The delegate must stay alive through the desired-state check and the engine call.
     std::shared_lock<decltype(rwMutex_)> lock(rwMutex_);
-    if (dbStore_ == nullptr || !shrinkManager_.TryBegin(enable)) {
+    if (dbStore_ == nullptr) {
+        // Close() invalidated the manager and removed this task if it had not started yet.
+        ZLOGD("shrink task skipped, db:%{public}s already closed", StoreUtil::Anonymous(storeId_).c_str());
+        return;
+    }
+    if (!shrinkManager_.TryBegin(enable)) {
+        // A newer opposite request superseded this task; the newer task owns the engine call.
+        ZLOGD("shrink task superseded, enable:%{public}d store:%{public}s", enable,
+            StoreUtil::Anonymous(storeId_).c_str());
         return;
     }
     DistributedDB::ShrinkParam param;
     param.operation = DistributedDB::ShrinkOperation::SET;
     param.enable = enable;
     DistributedDB::PragmaData data = &param;
-    auto status = StoreUtil::ConvertStatus(dbStore_->Pragma(DistributedDB::SHRINK, data));
-    if (status != SUCCESS) {
-        ReportDBFaultEvent(status, "RunShrink");
-        ZLOGE("shrink switch failed, enable:%{public}d status:0x%{public}x store:%{public}s", enable,
-            static_cast<uint32_t>(status), StoreUtil::Anonymous(storeId_).c_str());
-    } else {
+    auto status = dbStore_->Pragma(DistributedDB::SHRINK, data);
+    // DFX grading: transient or unsupported engine results are expected best-effort outcomes, so they
+    // only produce a warning. Other results are reported as a fault event.
+    if (status == DistributedDB::DBStatus::OK) {
         ZLOGI("shrink switch applied, enable:%{public}d store:%{public}s", enable,
             StoreUtil::Anonymous(storeId_).c_str());
+    } else if (status == DistributedDB::DBStatus::BUSY || status == DistributedDB::DBStatus::TIME_OUT ||
+        status == DistributedDB::DBStatus::NOT_SUPPORT) {
+        ZLOGW("shrink switch not applied, enable:%{public}d status:%{public}d store:%{public}s", enable,
+            static_cast<int32_t>(status), StoreUtil::Anonymous(storeId_).c_str());
+    } else {
+        ZLOGE("shrink switch failed, enable:%{public}d status:%{public}d store:%{public}s", enable,
+            static_cast<int32_t>(status), StoreUtil::Anonymous(storeId_).c_str());
+        ReportDBFaultEvent(StoreUtil::ConvertStatus(status), "RunShrink");
     }
-    shrinkManager_.Finish();
+}
+
+// Only the store open path calls this before the wrapper is published to other threads; the flag is a
+// plain bool and this setter is not thread-safe.
+void SingleStoreImpl::SetShrinkSupported(bool supported)
+{
+    shrinkSupported_ = supported;
+    ZLOGD("shrink capability updated, supported:%{public}d store:%{public}s", static_cast<int32_t>(supported),
+        StoreUtil::Anonymous(storeId_).c_str());
+}
+
+void SingleStoreImpl::GetShrinkStateForTest(bool &desiredEnabled, uint32_t &pendingTasks) const
+{
+    shrinkManager_.GetState(desiredEnabled, pendingTasks);
 }
 
 std::shared_ptr<ObserverBridge> SingleStoreImpl::PutIn(uint32_t &realType, std::shared_ptr<Observer> observer)
