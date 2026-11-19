@@ -1634,7 +1634,7 @@ HWTEST_F(EnableShrinkTest, ConcurrentReadDuringReclaim, TestSize.Level1)
     ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     ASSERT_TRUE(WaitShrinkSettled(*impl, true, WAIT_SWITCH_TIMEOUT_MS));
     bool engineEnabled = false;
-    if (!ReadEngineShrinkEnabled(*impl, engineEnabled)) {
+    if (!ReadEngineShrinkEnabled(impl, engineEnabled)) {
         CloseStore(storeId, store);
         GTEST_SKIP() << "engine shrink GET is not available on this image";
     }
