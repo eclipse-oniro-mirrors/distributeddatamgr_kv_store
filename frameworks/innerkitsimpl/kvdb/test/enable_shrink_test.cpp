@@ -87,6 +87,9 @@ constexpr int64_t CONCURRENT_RECLAIM_MIN_DROP_PERCENT = 10;
 // Keep the readers running for a short stable window after the reclamation is observed.
 constexpr int64_t CONCURRENT_RECLAIM_SETTLE_MS = 1000;
 constexpr int32_t CONCURRENT_LIVE_CHECK_KEYS = 8;
+// Verify a rotating subset of the survive dataset per iteration to keep each iteration cheap
+// enough to collect latency samples; every key is still covered across iterations.
+constexpr int32_t CONCURRENT_ENTRIES_PER_READ = 8;
 constexpr int32_t CONCURRENT_MIN_BASELINE_SAMPLES = 30;
 constexpr int32_t CONCURRENT_MIN_RECLAIM_SAMPLES = 100;
 // The two latency bounds below are engineering upper bounds against long blocking/deadlock,
@@ -1022,51 +1025,35 @@ bool CheckStableRead(const std::shared_ptr<SingleKvStore> &store, const Key &sta
     return store->Get(stableKey, value) == SUCCESS && value.ToString() == stableValue;
 }
 
-bool CheckEntriesRead(const std::shared_ptr<SingleKvStore> &store, const Key &prefix,
-    const std::map<std::string, std::string> &expectedValues)
+bool CheckEntriesRead(const std::shared_ptr<SingleKvStore> &store,
+    const std::map<std::string, std::string> &expectedValues, size_t offset)
 {
-    std::vector<Entry> entries;
-    if (store->GetEntries(prefix, entries) != SUCCESS) {
-        return false;
+    // GetEntries(Key) is not usable on the GaussDB RD engine: the client converts the prefix
+    // into a prefix Query which RD rejects with INVALID_ARGUMENT. Use point reads instead.
+    // Only a rotating subset is checked per iteration so that the reader loop stays cheap and
+    // produces enough latency samples; all keys are covered over successive iterations.
+    if (expectedValues.empty()) {
+        return true;
     }
-    if (entries.size() != expectedValues.size()) {
-        return false;
+    auto iter = expectedValues.begin();
+    size_t start = offset % expectedValues.size();
+    for (size_t index = 0; index < start; ++index) {
+        ++iter;
     }
-    for (const auto &entry : entries) {
-        auto iter = expectedValues.find(entry.key.ToString());
-        if (iter == expectedValues.end() || entry.value.ToString() != iter->second) {
+    size_t checked = 0;
+    size_t maxChecks = std::min(static_cast<size_t>(CONCURRENT_ENTRIES_PER_READ), expectedValues.size());
+    while (checked < maxChecks) {
+        Value value;
+        if (store->Get(Key(iter->first), value) != SUCCESS || value.ToString() != iter->second) {
             return false;
         }
+        ++iter;
+        if (iter == expectedValues.end()) {
+            iter = expectedValues.begin();
+        }
+        ++checked;
     }
     return true;
-}
-
-bool CheckResultSetRead(const std::shared_ptr<SingleKvStore> &store, const Key &prefix,
-    const std::map<std::string, std::string> &expectedValues)
-{
-    std::shared_ptr<KvStoreResultSet> resultSet;
-    Status status = store->GetResultSet(prefix, resultSet);
-    if (status == NOT_FOUND) {
-        return expectedValues.empty();
-    }
-    if (status != SUCCESS || resultSet == nullptr) {
-        return false;
-    }
-    int count = resultSet->GetCount();
-    bool ok = count == static_cast<int>(expectedValues.size());
-    while (ok && resultSet->MoveToNext()) {
-        Entry entry;
-        if (resultSet->GetEntry(entry) != SUCCESS) {
-            ok = false;
-            break;
-        }
-        auto iter = expectedValues.find(entry.key.ToString());
-        if (iter == expectedValues.end() || entry.value.ToString() != iter->second) {
-            ok = false;
-        }
-    }
-    (void)store->CloseResultSet(resultSet);
-    return ok;
 }
 
 bool CheckReclaimKeyRead(const std::shared_ptr<SingleKvStore> &store, const Key &key,
@@ -1098,6 +1085,7 @@ void RunLiveCheckRead(const std::shared_ptr<SingleKvStore> &store, ReaderContext
 void RunReaderLoop(const std::shared_ptr<SingleKvStore> &store, ReaderContext &context, int32_t reader)
 {
     size_t liveIndex = static_cast<size_t>(reader);
+    size_t entriesOffset = static_cast<size_t>(reader) * CONCURRENT_ENTRIES_PER_READ;
     while (!context.stop.load()) {
         auto start = std::chrono::steady_clock::now();
         if (!CheckStableRead(store, context.stableKey, context.stableValue)) {
@@ -1106,15 +1094,10 @@ void RunReaderLoop(const std::shared_ptr<SingleKvStore> &store, ReaderContext &c
         context.Record(reader, start);
 
         start = std::chrono::steady_clock::now();
-        if (!CheckEntriesRead(store, context.survivePrefix, context.surviveValues)) {
+        if (!CheckEntriesRead(store, context.surviveValues, entriesOffset)) {
             context.ReportFailure(reader);
         }
-        context.Record(reader, start);
-
-        start = std::chrono::steady_clock::now();
-        if (!CheckResultSetRead(store, context.survivePrefix, context.surviveValues)) {
-            context.ReportFailure(reader);
-        }
+        entriesOffset += CONCURRENT_ENTRIES_PER_READ;
         context.Record(reader, start);
 
         if (!context.liveCheckKeys.empty()) {
@@ -1270,35 +1253,36 @@ void VerifySurvivingEntries(const std::shared_ptr<SingleKvStore> &store, const R
     EXPECT_EQ(store->Get(context.stableKey, stableCheck), SUCCESS);
     EXPECT_EQ(stableCheck.ToString(), context.stableValue);
 
-    std::vector<Entry> survivors;
-    EXPECT_EQ(store->GetEntries(context.survivePrefix, survivors), SUCCESS);
-    std::map<std::string, int32_t> seen;
+    // GetEntries(Key) cannot be used on the RD engine: SingleStoreImpl converts the prefix into
+    // a prefix Query which RD rejects with INVALID_ARGUMENT. Verify with point reads instead.
+    int32_t survivors = 0;
     int32_t mismatches = 0;
-    for (const auto &entry : survivors) {
-        auto iter = context.surviveValues.find(entry.key.ToString());
-        if (iter == context.surviveValues.end() || entry.value.ToString() != iter->second) {
+    for (const auto &item : context.surviveValues) {
+        Value value;
+        if (store->Get(Key(item.first), value) != SUCCESS) {
+            mismatches++;
+            continue;
+        }
+        survivors++;
+        if (value.ToString() != item.second) {
             mismatches++;
         }
-        seen[entry.key.ToString()]++;
     }
-    int32_t duplicates = 0;
-    for (const auto &item : seen) {
-        if (item.second != 1) {
-            duplicates++;
-        }
-    }
-    EXPECT_EQ(static_cast<int32_t>(survivors.size()), CONCURRENT_SURVIVE_KEYS);
-    EXPECT_EQ(static_cast<int32_t>(seen.size()), CONCURRENT_SURVIVE_KEYS);
+    EXPECT_EQ(survivors, CONCURRENT_SURVIVE_KEYS);
     EXPECT_EQ(mismatches, 0);
-    EXPECT_EQ(duplicates, 0);
 
     for (const auto &key : context.liveCheckKeys) {
         Value value;
         EXPECT_EQ(store->Get(key, value), KEY_NOT_FOUND);
     }
-    std::vector<Entry> reclaimLeft;
-    EXPECT_EQ(store->GetEntries(context.reclaimPrefix, reclaimLeft), SUCCESS);
-    EXPECT_TRUE(reclaimLeft.empty());
+    int32_t reclaimLeft = 0;
+    for (const auto &item : context.reclaimValues) {
+        Value value;
+        if (store->Get(Key(item.first), value) == SUCCESS) {
+            reclaimLeft++;
+        }
+    }
+    EXPECT_EQ(reclaimLeft, 0);
 }
 
 void RecordConcurrentProperties(const ConcurrentSummary &summary, const ConcurrentReclaimRun &run,
