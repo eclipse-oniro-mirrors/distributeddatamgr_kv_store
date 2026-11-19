@@ -2084,7 +2084,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery001, TestSize.Leve
      * @tc.steps: step2. Use range query conditions to obtain the dataset and check the dataset
      * @tc.expected: step2. The expected data are 2, 3, 4.
      */
-    Query query1 = Query::Select().Range({'2'}, {'4'});
+    DistributedDB::Query query1 = DistributedDB::Query::Select().Range({'2'}, {'4'});
     std::vector<Entry> entries;
     int ret = g_kvNbDelegatePtr->GetEntries(query1, entries);
     EXPECT_EQ(entries.size(), 3u);
@@ -2099,7 +2099,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery001, TestSize.Leve
      * @tc.steps: step3. Use range query conditions to obtain the dataset and check the dataset
      * @tc.expected: step3. The expected data are 0, 1, 2, 3, 4.
      */
-    Query query2 = Query::Select().Range({}, {'4'});
+    DistributedDB::Query query2 = DistributedDB::Query::Select().Range({}, {'4'});
     ret = g_kvNbDelegatePtr->GetEntries(query2, entries);
     EXPECT_EQ(entries.size(), 5u);
     targetKey = 0; // 0 is the initial key that is expected to be found
@@ -2113,7 +2113,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery001, TestSize.Leve
      * @tc.steps: step4. Use range query conditions to obtain the dataset and check the dataset
      * @tc.expected: step4. The expected data are 2, 3, 4, 5.
      */
-    Query query3 = Query::Select().Range({'2'}, {});
+    DistributedDB::Query query3 = DistributedDB::Query::Select().Range({'2'}, {});
     ret = g_kvNbDelegatePtr->GetEntries(query3, entries);
     EXPECT_EQ(entries.size(), 4u);
     targetKey = 2; // 2 is the initial key that is expected to be found
@@ -2167,7 +2167,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery002, TestSize.Leve
      * @tc.steps: step2. Use range query conditions to obtain the resultset and check the resultset
      * @tc.expected: step2. The expected data are 2, 3, 4.
      */
-    Query fullQuery = Query::Select().Range({'2'}, {'4'});
+    DistributedDB::Query fullQuery = DistributedDB::Query::Select().Range({'2'}, {'4'});
     KvStoreResultSet *resultSet = nullptr;
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(fullQuery, resultSet), OK);
     EXPECT_NE(resultSet, nullptr);
@@ -2181,7 +2181,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery002, TestSize.Leve
      * @tc.steps: step3. Use range query conditions to obtain the resultset and check the resultset
      * @tc.expected: step3. The expected data are 0, 1, 2, 3, 4.
      */
-    Query fullQuery2 = Query::Select().Range({}, {'4'});
+    DistributedDB::Query fullQuery2 = DistributedDB::Query::Select().Range({}, {'4'});
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(fullQuery2, resultSet), OK);
     EXPECT_NE(resultSet, nullptr);
     beginTargetKey = 0; // 0 is the initial key that is expected to be found
@@ -2194,7 +2194,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery002, TestSize.Leve
      * @tc.steps: step4. Use range query conditions to obtain the resultset and check the resultset
      * @tc.expected: step4. The expected data are 2, 3, 4, 5.
      */
-    Query fullQuery3 = Query::Select().Range({'2'}, {});
+    DistributedDB::Query fullQuery3 = DistributedDB::Query::Select().Range({'2'}, {});
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(fullQuery3, resultSet), OK);
     EXPECT_NE(resultSet, nullptr);
     beginTargetKey = 2; // 2 is the initial key that is expected to be found
@@ -2207,7 +2207,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery002, TestSize.Leve
      * @tc.steps: step5. Use range query conditions to obtain the resultset and check the resultset
      * @tc.expected: step5. The expected data are 0, 1, 2, 3, 4, 5.
      */
-    Query fullQuery4 = Query::Select().Range({}, {});
+    DistributedDB::Query fullQuery4 = DistributedDB::Query::Select().Range({}, {});
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(fullQuery4, resultSet), OK);
     EXPECT_NE(resultSet, nullptr);
     beginTargetKey = 0; // 0 is the initial key that is expected to be found
@@ -2220,7 +2220,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery002, TestSize.Leve
      * @tc.steps: step6. Use range query conditions to obtain the resultset and check the resultset
      * @tc.expected: step6. The expected data are 0, 1, 2, 3, 4, 5.
      */
-    DistributedDB::Query query = Query::Select().Range({}, {});
+    DistributedDB::Query query = DistributedDB::Query::Select().Range({}, {});
     vector<Entry> returnEntries;
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(query, returnEntries), OK);
     EXPECT_EQ(returnEntries.size(), 6); // 6 means data: 0, 1, 2, 3, 4, 5.
@@ -2257,7 +2257,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery003, TestSize.Leve
      * @tc.expected: step2. return INVALID_ARGS.
      */
     KvStoreResultSet *resultSet = nullptr;
-    Query inValidQuery = Query::Select().Range({'2'}, {'4'}).Range({'1'}, {'6'});
+    DistributedDB::Query inValidQuery = DistributedDB::Query::Select().Range({'2'}, {'4'}).Range({'1'}, {'6'});
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(inValidQuery, resultSet), INVALID_ARGS);
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(inValidQuery, entries), INVALID_ARGS);
 
@@ -2265,7 +2265,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery003, TestSize.Leve
      * @tc.steps: step3. Use invalid range query conditions to obtain the resultset.
      * @tc.expected: step3. return INVALID_ARGS.
      */
-    Query inValidQuery2 = Query::Select().Range({'2'}, {'4'}).And();
+    DistributedDB::Query inValidQuery2 = DistributedDB::Query::Select().Range({'2'}, {'4'}).And();
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(inValidQuery2, resultSet), INVALID_ARGS);
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(inValidQuery2, entries), INVALID_ARGS);
 
@@ -2274,12 +2274,12 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery003, TestSize.Leve
      * @tc.expected: step4. return INVALID_ARGS.
      */
     Key keyCan(1024, 'a');
-    Query ValidQuery3 = Query::Select().Range(keyCan, {'4'});
+    DistributedDB::Query ValidQuery3 = DistributedDB::Query::Select().Range(keyCan, {'4'});
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(ValidQuery3, resultSet), OK);
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(ValidQuery3, entries), NOT_FOUND);
 
     Key keyInvalid(1025, 'a');
-    Query inValidQuery4 = Query::Select().Range(keyInvalid, {'4'});
+    DistributedDB::Query inValidQuery4 = DistributedDB::Query::Select().Range(keyInvalid, {'4'});
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(inValidQuery4, resultSet), INVALID_ARGS);
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(inValidQuery4, entries), INVALID_ARGS);
 
@@ -2336,7 +2336,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery004, TestSize.Leve
      * @tc.steps: step2. Use range query conditions to obtain the resultset and check the resultset move fuction.
      * @tc.expected: step2. move founction is OK and the expected data are 2, 3, 4.
      */
-    Query fullQuery = Query::Select().Range({'2'}, {'4'});
+    DistributedDB::Query fullQuery = DistributedDB::Query::Select().Range({'2'}, {'4'});
     KvStoreResultSet *resultSet = nullptr;
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(fullQuery, resultSet), OK);
     EXPECT_NE(resultSet, nullptr);
@@ -2350,7 +2350,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery004, TestSize.Leve
      * @tc.steps: step3. Use range query conditions to obtain the resultset and check the resultset move fuction.
      * @tc.expected: step3. move founction is OK and the expected data are 0, 1, 2, 3, 4.
      */
-    Query fullQuery2 = Query::Select().Range({}, {'4'});
+    DistributedDB::Query fullQuery2 = DistributedDB::Query::Select().Range({}, {'4'});
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(fullQuery2, resultSet), OK);
     EXPECT_NE(resultSet, nullptr);
 
@@ -2364,7 +2364,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery004, TestSize.Leve
      * @tc.steps: step3. Use range query conditions to obtain the resultset and check the resultset move fuction.
      * @tc.expected: step3. move founction is OK and the expected data are 2, 3, 4, 5.
      */
-    Query fullQuery3 = Query::Select().Range({'2'}, {});
+    DistributedDB::Query fullQuery3 = DistributedDB::Query::Select().Range({'2'}, {});
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(fullQuery3, resultSet), OK);
     EXPECT_NE(resultSet, nullptr);
     beginTargetKey = 2; // 2 is the initial key that is expected to be found
@@ -2405,7 +2405,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery005, TestSize.Leve
      * @tc.steps: step2. Use range query conditions that end key equal with data in db, then move to next.
      * @tc.expected: step2. move to next four times successfully.
      */
-    Query fullQuery = Query::Select().Range({'2'}, {'5'});
+    DistributedDB::Query fullQuery = DistributedDB::Query::Select().Range({'2'}, {'5'});
     KvStoreResultSet *resultSet = nullptr;
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(fullQuery, resultSet), OK);
     EXPECT_NE(resultSet, nullptr);
@@ -2422,7 +2422,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery005, TestSize.Leve
      * @tc.steps: step2. Use range query conditions that end key equal with data in db, then move to next.
      * @tc.expected: step2. move to next four times successfully.
      */
-    Query fullQuery2 = Query::Select().Range({'2'}, {'8'});
+    DistributedDB::Query fullQuery2 = DistributedDB::Query::Select().Range({'2'}, {'8'});
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(fullQuery2, resultSet), OK);
     EXPECT_NE(resultSet, nullptr);
     beginTargetKey = 0; // 0 is the initial key that is expected to be found
@@ -2466,7 +2466,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery006, TestSize.Leve
      * @tc.expected: step2. return INVALID_ARGS.
      */
     KvStoreResultSet *resultSet = nullptr;
-    Query inValidQuery = Query::Select();
+    DistributedDB::Query inValidQuery = DistributedDB::Query::Select();
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(inValidQuery, resultSet), INVALID_ARGS);
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(inValidQuery, entries), INVALID_ARGS);
 
@@ -2474,7 +2474,7 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, RdRangeQuery006, TestSize.Leve
      * @tc.steps: step3. Use invalid range query conditions to obtain the resultset.
      * @tc.expected: step3. return INVALID_ARGS.
      */
-    Query inValidQuery2 = Query::Select().PrefixKey({});
+    DistributedDB::Query inValidQuery2 = DistributedDB::Query::Select().PrefixKey({});
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(inValidQuery2, resultSet), INVALID_ARGS);
     EXPECT_EQ(g_kvNbDelegatePtr->GetEntries(inValidQuery2, entries), INVALID_ARGS);
 
