@@ -71,17 +71,24 @@ constexpr size_t PLAIN_VALUE_SIZE = 4 * 1024;
 
 constexpr int32_t BELOW_THRESHOLD_DELETE_KEYS = 160;
 
-constexpr int32_t CONCURRENT_KEYS = 1024;
-constexpr size_t CONCURRENT_VALUE_SIZE = 8 * 1024;
-constexpr int32_t CONCURRENT_DELETE_KEYS = 384;
-constexpr int32_t CONCURRENT_DELETE_STEP = 2;
+// AC-1.5: two disjoint datasets. The reclaim dataset is deleted entirely so that the engine
+// reclamation is triggered, while the survive dataset is kept for concurrent consistency checks.
+constexpr int32_t CONCURRENT_RECLAIM_KEYS = 1024;
+constexpr size_t CONCURRENT_RECLAIM_VALUE_SIZE = 8 * 1024;
+constexpr int32_t CONCURRENT_SURVIVE_KEYS = 128;
+constexpr size_t CONCURRENT_SURVIVE_VALUE_SIZE = 1024;
 constexpr int32_t CONCURRENT_READERS = 3;
 constexpr int64_t CONCURRENT_BASELINE_MS = 800;
-constexpr int32_t CONCURRENT_DELETE_CHUNK = 16;
+constexpr int32_t CONCURRENT_DELETE_CHUNK = 64;
 constexpr int64_t CONCURRENT_DELETE_SLEEP_MS = 10;
-constexpr int64_t CONCURRENT_RECLAIM_TIMEOUT_MS = 30000;
-constexpr int64_t CONCURRENT_RECLAIM_WINDOW_MS = 3000;
+// Wait for the engine reclamation while the readers keep running (aligned with AC-1.1 settle timeout).
+constexpr int64_t CONCURRENT_RECLAIM_TIMEOUT_MS = 60000;
 constexpr int64_t CONCURRENT_RECLAIM_MIN_DROP_PERCENT = 10;
+// Keep the readers running for a short stable window after the reclamation is observed.
+constexpr int64_t CONCURRENT_RECLAIM_SETTLE_MS = 1000;
+constexpr int32_t CONCURRENT_LIVE_CHECK_KEYS = 8;
+constexpr int32_t CONCURRENT_MIN_BASELINE_SAMPLES = 30;
+constexpr int32_t CONCURRENT_MIN_RECLAIM_SAMPLES = 100;
 // The two latency bounds below are engineering upper bounds against long blocking/deadlock,
 // not spec numbers; spec AC-1.5 itself does not define a fixed millisecond threshold.
 constexpr int64_t CONCURRENT_MAX_READ_MICROS = 5 * 1000 * 1000;
@@ -108,7 +115,8 @@ constexpr int64_t MILLIS_PER_SECOND = 1000;
 constexpr int64_t MICROS_PER_SECOND = MICROS_PER_MILLI * MILLIS_PER_SECOND;
 constexpr size_t STABLE_ENTRY_INDEX = 1;
 
-constexpr const char *CONCURRENT_PREFIX = "concurrent_";
+constexpr const char *CONCURRENT_RECLAIM_PREFIX = "reclaim_";
+constexpr const char *CONCURRENT_SURVIVE_PREFIX = "survive_";
 
 struct DiskUsage {
     uint64_t blockBytes = 0;
@@ -255,6 +263,21 @@ bool EnsureShrinkEngineReadyForTest(const std::shared_ptr<SingleStoreImpl> &impl
     return true;
 }
 
+bool ReadEngineShrinkEnabled(const std::shared_ptr<SingleStoreImpl> &impl, bool &enabled)
+{
+    if (impl == nullptr || impl->dbStore_ == nullptr) {
+        return false;
+    }
+    DistributedDB::ShrinkParam getParam;
+    getParam.operation = DistributedDB::ShrinkOperation::GET;
+    DistributedDB::PragmaData getData = &getParam;
+    if (impl->dbStore_->Pragma(DistributedDB::SHRINK, getData) != DistributedDB::DBStatus::OK) {
+        return false;
+    }
+    enabled = getParam.enable;
+    return true;
+}
+
 bool PutBatchChunked(const std::shared_ptr<SingleKvStore> &store, const std::vector<Entry> &entries)
 {
     if (store == nullptr) {
@@ -370,57 +393,6 @@ bool WaitShrinkSettled(const SingleStoreImpl &impl, bool desiredEnabled, int64_t
     }
     auto state = ReadShrinkState(impl);
     return state.desiredEnabled == desiredEnabled && state.pendingTasks == 0;
-}
-
-bool ReadEntriesByPrefix(const std::shared_ptr<SingleStoreImpl> &impl, const Key &prefix,
-    std::vector<SingleStoreImpl::DBEntry> &entries)
-{
-    if (impl == nullptr || impl->dbStore_ == nullptr) {
-        return false;
-    }
-    SingleStoreImpl::DBKey dbPrefix = impl->convertor_.GetPrefix(prefix);
-    if (dbPrefix.empty()) {
-        return false;
-    }
-    entries.clear();
-    auto status = impl->dbStore_->GetEntries(dbPrefix, entries);
-    return status == SingleStoreImpl::DBStatus::OK || status == SingleStoreImpl::DBStatus::NOT_FOUND;
-}
-
-bool ReadResultSetByPrefix(const std::shared_ptr<SingleStoreImpl> &impl, const Key &prefix,
-    DistributedDB::KvStoreResultSet *&resultSet)
-{
-    resultSet = nullptr;
-    if (impl == nullptr || impl->dbStore_ == nullptr) {
-        return false;
-    }
-    SingleStoreImpl::DBKey dbPrefix = impl->convertor_.GetPrefix(prefix);
-    if (dbPrefix.empty()) {
-        return false;
-    }
-    auto status = impl->dbStore_->GetEntries(dbPrefix, resultSet);
-    if (status == SingleStoreImpl::DBStatus::OK) {
-        return resultSet != nullptr;
-    }
-    if (status == SingleStoreImpl::DBStatus::NOT_FOUND) {
-        return true;
-    }
-    if (resultSet != nullptr) {
-        (void)impl->dbStore_->CloseResultSet(resultSet);
-        resultSet = nullptr;
-    }
-    return false;
-}
-
-bool DBEntryMatches(const SingleStoreImpl::DBEntry &entry,
-    const std::map<std::string, std::string> &expectedValues)
-{
-    std::string key(entry.key.begin(), entry.key.end());
-    auto iter = expectedValues.find(key);
-    if (iter == expectedValues.end()) {
-        return false;
-    }
-    return std::string(entry.value.begin(), entry.value.end()) == iter->second;
 }
 
 std::string BoolText(bool value)
@@ -943,34 +915,82 @@ struct ConcurrentSummary {
     int32_t readFailuresTotal = 0;
 };
 
+struct ConcurrentReclaimRun {
+    int32_t writeFailures = 0;
+    int32_t deletedKeys = 0;
+    bool reclaimDuringReads = false;
+    bool reclaimObserved = false;
+    int64_t deleteMicros = 0;
+    int64_t reclaimMicros = 0;
+    DiskUsage finalUsage;
+    int64_t dropPercent = 0;
+};
+
+bool PrepareConcurrentDatasets(const std::shared_ptr<SingleKvStore> &store,
+    std::vector<Entry> &reclaimEntries, std::vector<Entry> &surviveEntries)
+{
+    reclaimEntries = MakeEntries(CONCURRENT_RECLAIM_PREFIX, CONCURRENT_RECLAIM_KEYS,
+        CONCURRENT_RECLAIM_VALUE_SIZE, true);
+    if (!PutBatchChunked(store, reclaimEntries)) {
+        return false;
+    }
+    surviveEntries = MakeEntries(CONCURRENT_SURVIVE_PREFIX, CONCURRENT_SURVIVE_KEYS,
+        CONCURRENT_SURVIVE_VALUE_SIZE, true);
+    return PutBatchChunked(store, surviveEntries);
+}
+
+void BuildLiveCheckKeys(const std::vector<Entry> &reclaimEntries, std::vector<Key> &liveCheckKeys)
+{
+    liveCheckKeys.reserve(static_cast<size_t>(CONCURRENT_LIVE_CHECK_KEYS));
+    if (reclaimEntries.empty()) {
+        return;
+    }
+    size_t step = std::max<size_t>(1,
+        reclaimEntries.size() / static_cast<size_t>(CONCURRENT_LIVE_CHECK_KEYS));
+    for (size_t index = 0; index < reclaimEntries.size() &&
+        liveCheckKeys.size() < static_cast<size_t>(CONCURRENT_LIVE_CHECK_KEYS); index += step) {
+        liveCheckKeys.push_back(reclaimEntries[index].key);
+    }
+}
+
 struct ReaderContext {
     std::atomic<bool> reclaimPhase { false };
     std::atomic<bool> stop { false };
     std::vector<std::vector<int64_t>> baselineSamples;
     std::vector<std::vector<int64_t>> reclaimSamples;
     std::vector<int32_t> readFailures;
-    std::map<std::string, std::string> expectedValues;
+    std::map<std::string, std::string> surviveValues;
+    std::map<std::string, std::string> reclaimValues;
+    std::vector<Key> deleteKeys;
+    std::vector<Key> liveCheckKeys;
     Key stableKey;
     std::string stableValue;
-    Key queryPrefix;
-    std::vector<Key> deleteKeys;
+    Key survivePrefix;
+    Key reclaimPrefix;
+    std::string storeId;
 
-    void Init(const std::vector<Entry> &entries)
+    void Init(const std::string &storeIdParam, const std::vector<Entry> &surviveEntries,
+        const std::vector<Entry> &reclaimEntries)
     {
         baselineSamples.assign(CONCURRENT_READERS, {});
         reclaimSamples.assign(CONCURRENT_READERS, {});
         readFailures.assign(CONCURRENT_READERS, 0);
-        for (const auto &entry : entries) {
-            expectedValues[entry.key.ToString()] = entry.value.ToString();
+        storeId = storeIdParam;
+        survivePrefix = CONCURRENT_SURVIVE_PREFIX;
+        reclaimPrefix = CONCURRENT_RECLAIM_PREFIX;
+        for (const auto &entry : surviveEntries) {
+            surviveValues[entry.key.ToString()] = entry.value.ToString();
         }
-        stableKey = entries[STABLE_ENTRY_INDEX].key;
-        stableValue = entries[STABLE_ENTRY_INDEX].value.ToString();
-        queryPrefix = CONCURRENT_PREFIX;
-        deleteKeys.reserve(static_cast<size_t>(CONCURRENT_DELETE_KEYS));
-        for (int32_t index = 0; index < CONCURRENT_DELETE_KEYS * CONCURRENT_DELETE_STEP;
-             index += CONCURRENT_DELETE_STEP) {
-            deleteKeys.push_back(entries[index].key);
+        for (const auto &entry : reclaimEntries) {
+            reclaimValues[entry.key.ToString()] = entry.value.ToString();
         }
+        stableKey = surviveEntries[STABLE_ENTRY_INDEX].key;
+        stableValue = surviveEntries[STABLE_ENTRY_INDEX].value.ToString();
+        deleteKeys.reserve(reclaimEntries.size());
+        for (const auto &entry : reclaimEntries) {
+            deleteKeys.push_back(entry.key);
+        }
+        BuildLiveCheckKeys(reclaimEntries, liveCheckKeys);
     }
 
     void Record(int32_t reader, std::chrono::steady_clock::time_point start)
@@ -996,53 +1016,82 @@ bool CheckStableRead(const std::shared_ptr<SingleKvStore> &store, const Key &sta
     return store->Get(stableKey, value) == SUCCESS && value.ToString() == stableValue;
 }
 
-bool CheckEntriesRead(const std::shared_ptr<SingleStoreImpl> &impl, const Key &prefix,
+bool CheckEntriesRead(const std::shared_ptr<SingleKvStore> &store, const Key &prefix,
     const std::map<std::string, std::string> &expectedValues)
 {
-    std::vector<SingleStoreImpl::DBEntry> entriesByPrefix;
-    if (!ReadEntriesByPrefix(impl, prefix, entriesByPrefix)) {
+    std::vector<Entry> entries;
+    if (store->GetEntries(prefix, entries) != SUCCESS) {
         return false;
     }
-    for (const auto &entry : entriesByPrefix) {
-        if (!DBEntryMatches(entry, expectedValues)) {
+    if (entries.size() != expectedValues.size()) {
+        return false;
+    }
+    for (const auto &entry : entries) {
+        auto iter = expectedValues.find(entry.key.ToString());
+        if (iter == expectedValues.end() || entry.value.ToString() != iter->second) {
             return false;
         }
     }
     return true;
 }
 
-bool CheckResultSetEntries(DistributedDB::KvStoreResultSet &resultSet,
+bool CheckResultSetRead(const std::shared_ptr<SingleKvStore> &store, const Key &prefix,
     const std::map<std::string, std::string> &expectedValues)
 {
-    int32_t count = resultSet.GetCount();
-    if (count < 0 || count > CONCURRENT_KEYS) {
+    std::shared_ptr<KvStoreResultSet> resultSet;
+    Status status = store->GetResultSet(prefix, resultSet);
+    if (status == NOT_FOUND) {
+        return expectedValues.empty();
+    }
+    if (status != SUCCESS || resultSet == nullptr) {
         return false;
     }
-    while (resultSet.MoveToNext()) {
-        SingleStoreImpl::DBEntry entry;
-        if (resultSet.GetEntry(entry) != SingleStoreImpl::DBStatus::OK ||
-            !DBEntryMatches(entry, expectedValues)) {
-            return false;
+    int count = resultSet->GetCount();
+    bool ok = count == static_cast<int>(expectedValues.size());
+    while (ok && resultSet->MoveToNext()) {
+        Entry entry;
+        if (resultSet->GetEntry(entry) != SUCCESS) {
+            ok = false;
+            break;
+        }
+        auto iter = expectedValues.find(entry.key.ToString());
+        if (iter == expectedValues.end() || entry.value.ToString() != iter->second) {
+            ok = false;
         }
     }
-    return true;
+    (void)store->CloseResultSet(resultSet);
+    return ok;
 }
 
-bool CheckResultSetRead(const std::shared_ptr<SingleStoreImpl> &impl, const Key &prefix,
+bool CheckReclaimKeyRead(const std::shared_ptr<SingleKvStore> &store, const Key &key,
     const std::map<std::string, std::string> &expectedValues)
 {
-    DistributedDB::KvStoreResultSet *resultSet = nullptr;
-    bool resultSetOk = ReadResultSetByPrefix(impl, prefix, resultSet);
-    if (resultSet != nullptr) {
-        resultSetOk = resultSetOk && CheckResultSetEntries(*resultSet, expectedValues);
-        (void)impl->dbStore_->CloseResultSet(resultSet);
+    Value value;
+    Status status = store->Get(key, value);
+    if (status == KEY_NOT_FOUND) {
+        return true;
     }
-    return resultSetOk;
+    if (status != SUCCESS) {
+        return false;
+    }
+    auto iter = expectedValues.find(key.ToString());
+    return iter != expectedValues.end() && value.ToString() == iter->second;
 }
 
-void RunReaderLoop(const std::shared_ptr<SingleKvStore> &store, const std::shared_ptr<SingleStoreImpl> &impl,
-    ReaderContext &context, int32_t reader)
+void RunLiveCheckRead(const std::shared_ptr<SingleKvStore> &store, ReaderContext &context,
+    int32_t reader, size_t liveIndex)
 {
+    const Key &liveKey = context.liveCheckKeys[liveIndex % context.liveCheckKeys.size()];
+    auto start = std::chrono::steady_clock::now();
+    if (!CheckReclaimKeyRead(store, liveKey, context.reclaimValues)) {
+        context.ReportFailure(reader);
+    }
+    context.Record(reader, start);
+}
+
+void RunReaderLoop(const std::shared_ptr<SingleKvStore> &store, ReaderContext &context, int32_t reader)
+{
+    size_t liveIndex = static_cast<size_t>(reader);
     while (!context.stop.load()) {
         auto start = std::chrono::steady_clock::now();
         if (!CheckStableRead(store, context.stableKey, context.stableValue)) {
@@ -1051,28 +1100,32 @@ void RunReaderLoop(const std::shared_ptr<SingleKvStore> &store, const std::share
         context.Record(reader, start);
 
         start = std::chrono::steady_clock::now();
-        if (!CheckEntriesRead(impl, context.queryPrefix, context.expectedValues)) {
+        if (!CheckEntriesRead(store, context.survivePrefix, context.surviveValues)) {
             context.ReportFailure(reader);
         }
         context.Record(reader, start);
 
         start = std::chrono::steady_clock::now();
-        if (!CheckResultSetRead(impl, context.queryPrefix, context.expectedValues)) {
+        if (!CheckResultSetRead(store, context.survivePrefix, context.surviveValues)) {
             context.ReportFailure(reader);
         }
         context.Record(reader, start);
+
+        if (!context.liveCheckKeys.empty()) {
+            RunLiveCheckRead(store, context, reader, liveIndex);
+            liveIndex++;
+        }
         SleepMillis(READER_YIELD_MS);
     }
 }
 
-std::vector<std::thread> StartReaders(const std::shared_ptr<SingleKvStore> &store,
-    const std::shared_ptr<SingleStoreImpl> &impl, ReaderContext &context)
+std::vector<std::thread> StartReaders(const std::shared_ptr<SingleKvStore> &store, ReaderContext &context)
 {
     std::vector<std::thread> readers;
     readers.reserve(CONCURRENT_READERS);
     for (int32_t reader = 0; reader < CONCURRENT_READERS; ++reader) {
-        readers.emplace_back([&store, &impl, &context, reader]() {
-            RunReaderLoop(store, impl, context, reader);
+        readers.emplace_back([&store, &context, reader]() {
+            RunReaderLoop(store, context, reader);
         });
     }
     return readers;
@@ -1085,23 +1138,91 @@ void JoinReaders(std::vector<std::thread> &readers)
     }
 }
 
-int32_t DeleteInReclaimWindow(const std::shared_ptr<SingleKvStore> &store,
-    const std::vector<Key> &deleteKeys)
+int64_t PollDropPercent(const std::string &storeId, uint64_t peakBytes, DiskUsage &usage)
 {
-    int32_t writeFailures = 0;
+    if (!QueryStoreDiskUsage(storeId, usage) || peakBytes == 0) {
+        return 0;
+    }
+    return DropPercent(peakBytes, usage.dbBlockBytes);
+}
+
+void TryRecordReclaim(const ReaderContext &context, uint64_t peakBytes, ConcurrentReclaimRun &run,
+    std::chrono::steady_clock::time_point start)
+{
+    if (run.reclaimObserved) {
+        return;
+    }
+    DiskUsage usage;
+    int64_t dropPercent = PollDropPercent(context.storeId, peakBytes, usage);
+    if (dropPercent < CONCURRENT_RECLAIM_MIN_DROP_PERCENT) {
+        return;
+    }
+    run.reclaimObserved = true;
+    run.reclaimDuringReads = !context.stop.load();
+    run.reclaimMicros = ElapsedMicros(start);
+    run.dropPercent = dropPercent;
+    run.finalUsage = usage;
+}
+
+void DeleteReclaimDataset(const std::shared_ptr<SingleKvStore> &store, const ReaderContext &context,
+    ConcurrentReclaimRun &run, uint64_t peakBytes)
+{
+    auto start = std::chrono::steady_clock::now();
     size_t offset = 0;
-    auto deadline = std::chrono::steady_clock::now() +
-        std::chrono::milliseconds(CONCURRENT_RECLAIM_WINDOW_MS);
-    while (offset < deleteKeys.size() && std::chrono::steady_clock::now() < deadline) {
-        size_t count = std::min(static_cast<size_t>(CONCURRENT_DELETE_CHUNK), deleteKeys.size() - offset);
-        std::vector<Key> chunk(deleteKeys.begin() + offset, deleteKeys.begin() + offset + count);
-        if (!DeleteBatchChunked(store, chunk)) {
-            writeFailures++;
+    while (offset < context.deleteKeys.size()) {
+        size_t count = std::min(static_cast<size_t>(CONCURRENT_DELETE_CHUNK),
+            context.deleteKeys.size() - offset);
+        std::vector<Key> chunk(context.deleteKeys.begin() + offset,
+            context.deleteKeys.begin() + offset + count);
+        if (DeleteBatchChunked(store, chunk)) {
+            run.deletedKeys += static_cast<int32_t>(count);
+        } else {
+            run.writeFailures++;
         }
         offset += count;
         SleepMillis(CONCURRENT_DELETE_SLEEP_MS);
+        TryRecordReclaim(context, peakBytes, run, start);
     }
-    return writeFailures;
+    run.deleteMicros = ElapsedMicros(start);
+}
+
+void RecordFinalReclaimUsage(const ReaderContext &context, uint64_t peakBytes, ConcurrentReclaimRun &run)
+{
+    DiskUsage usage;
+    int64_t dropPercent = PollDropPercent(context.storeId, peakBytes, usage);
+    if (usage.valid && dropPercent >= run.dropPercent) {
+        run.dropPercent = dropPercent;
+        run.finalUsage = usage;
+    }
+}
+
+void WaitReclaimObservation(const std::shared_ptr<SingleStoreImpl> &impl, const ReaderContext &context,
+    uint64_t peakBytes, ConcurrentReclaimRun &run, std::chrono::steady_clock::time_point start)
+{
+    (void)CheckpointStore(impl);
+    auto deadline = start + std::chrono::milliseconds(CONCURRENT_RECLAIM_TIMEOUT_MS);
+    while (!run.reclaimObserved && std::chrono::steady_clock::now() < deadline) {
+        TryRecordReclaim(context, peakBytes, run, start);
+        if (!run.reclaimObserved) {
+            SleepMillis(POLL_INTERVAL_MS);
+        }
+    }
+    if (run.reclaimObserved) {
+        SleepMillis(CONCURRENT_RECLAIM_SETTLE_MS);
+        RecordFinalReclaimUsage(context, peakBytes, run);
+    } else if (QueryStoreDiskUsage(context.storeId, run.finalUsage)) {
+        run.dropPercent = DropPercent(peakBytes, run.finalUsage.dbBlockBytes);
+    }
+}
+
+ConcurrentReclaimRun DeleteAndWaitReclaim(const std::shared_ptr<SingleKvStore> &store,
+    const std::shared_ptr<SingleStoreImpl> &impl, ReaderContext &context, uint64_t peakBytes)
+{
+    ConcurrentReclaimRun run;
+    auto start = std::chrono::steady_clock::now();
+    DeleteReclaimDataset(store, context, run, peakBytes);
+    WaitReclaimObservation(impl, context, peakBytes, run, start);
+    return run;
 }
 
 ConcurrentSummary SummarizeReaderSamples(const ReaderContext &context)
@@ -1123,43 +1244,68 @@ ConcurrentSummary SummarizeReaderSamples(const ReaderContext &context)
     return summary;
 }
 
-void VerifySurvivingEntries(const std::shared_ptr<SingleKvStore> &store,
-    const std::shared_ptr<SingleStoreImpl> &impl, const ReaderContext &context)
+void RunConcurrentPhase(const std::shared_ptr<SingleKvStore> &store,
+    const std::shared_ptr<SingleStoreImpl> &impl, ReaderContext &context, uint64_t peakBytes,
+    ConcurrentSummary &summary, ConcurrentReclaimRun &run)
+{
+    auto readers = StartReaders(store, context);
+    SleepMillis(CONCURRENT_BASELINE_MS);
+    context.reclaimPhase.store(true);
+    run = DeleteAndWaitReclaim(store, impl, context, peakBytes);
+    context.reclaimPhase.store(false);
+    context.stop.store(true);
+    JoinReaders(readers);
+    summary = SummarizeReaderSamples(context);
+}
+
+void VerifySurvivingEntries(const std::shared_ptr<SingleKvStore> &store, const ReaderContext &context)
 {
     Value stableCheck;
     EXPECT_EQ(store->Get(context.stableKey, stableCheck), SUCCESS);
     EXPECT_EQ(stableCheck.ToString(), context.stableValue);
-    EXPECT_EQ(store->Get(context.deleteKeys[0], stableCheck), KEY_NOT_FOUND);
-    std::vector<SingleStoreImpl::DBEntry> surviving;
-    EXPECT_TRUE(ReadEntriesByPrefix(impl, context.queryPrefix, surviving));
-    EXPECT_EQ(static_cast<int32_t>(surviving.size()), CONCURRENT_KEYS - CONCURRENT_DELETE_KEYS);
-    int32_t survivingMismatches = 0;
-    std::map<std::string, int32_t> survivingSeen;
-    for (const auto &entry : surviving) {
-        if (!DBEntryMatches(entry, context.expectedValues)) {
-            survivingMismatches++;
+
+    std::vector<Entry> survivors;
+    EXPECT_EQ(store->GetEntries(context.survivePrefix, survivors), SUCCESS);
+    std::map<std::string, int32_t> seen;
+    int32_t mismatches = 0;
+    for (const auto &entry : survivors) {
+        auto iter = context.surviveValues.find(entry.key.ToString());
+        if (iter == context.surviveValues.end() || entry.value.ToString() != iter->second) {
+            mismatches++;
         }
-        survivingSeen[std::string(entry.key.begin(), entry.key.end())]++;
+        seen[entry.key.ToString()]++;
     }
-    int32_t duplicateSurviving = 0;
-    for (const auto &item : survivingSeen) {
+    int32_t duplicates = 0;
+    for (const auto &item : seen) {
         if (item.second != 1) {
-            duplicateSurviving++;
+            duplicates++;
         }
     }
-    EXPECT_EQ(survivingMismatches, 0);
-    EXPECT_EQ(duplicateSurviving, 0);
-    EXPECT_EQ(static_cast<int32_t>(survivingSeen.size()), CONCURRENT_KEYS - CONCURRENT_DELETE_KEYS);
+    EXPECT_EQ(static_cast<int32_t>(survivors.size()), CONCURRENT_SURVIVE_KEYS);
+    EXPECT_EQ(static_cast<int32_t>(seen.size()), CONCURRENT_SURVIVE_KEYS);
+    EXPECT_EQ(mismatches, 0);
+    EXPECT_EQ(duplicates, 0);
+
+    for (const auto &key : context.liveCheckKeys) {
+        Value value;
+        EXPECT_EQ(store->Get(key, value), KEY_NOT_FOUND);
+    }
+    std::vector<Entry> reclaimLeft;
+    EXPECT_EQ(store->GetEntries(context.reclaimPrefix, reclaimLeft), SUCCESS);
+    EXPECT_TRUE(reclaimLeft.empty());
 }
 
-void RecordConcurrentProperties(const ConcurrentSummary &summary, const ReclaimProbe &probe,
-    int32_t writeFailures, bool checkpointOk)
+void RecordConcurrentProperties(const ConcurrentSummary &summary, const ConcurrentReclaimRun &run,
+    const DiskUsage &beforeDelete, bool checkpointOk, bool engineEnabled)
 {
     testing::Test::RecordProperty("concurrent_readers", static_cast<int64_t>(CONCURRENT_READERS));
-    testing::Test::RecordProperty("concurrent_stock_bytes",
-        static_cast<int64_t>(CONCURRENT_KEYS) * static_cast<int64_t>(CONCURRENT_VALUE_SIZE));
-    testing::Test::RecordProperty("concurrent_deleted_bytes",
-        static_cast<int64_t>(CONCURRENT_DELETE_KEYS) * static_cast<int64_t>(CONCURRENT_VALUE_SIZE));
+    testing::Test::RecordProperty("concurrent_survive_bytes",
+        static_cast<int64_t>(CONCURRENT_SURVIVE_KEYS) * static_cast<int64_t>(CONCURRENT_SURVIVE_VALUE_SIZE));
+    testing::Test::RecordProperty("concurrent_reclaim_dataset_bytes",
+        static_cast<int64_t>(CONCURRENT_RECLAIM_KEYS) * static_cast<int64_t>(CONCURRENT_RECLAIM_VALUE_SIZE));
+    testing::Test::RecordProperty("concurrent_deleted_keys", static_cast<int64_t>(run.deletedKeys));
+    testing::Test::RecordProperty("concurrent_delete_micros", run.deleteMicros);
+    testing::Test::RecordProperty("concurrent_reclaim_micros", run.reclaimMicros);
     testing::Test::RecordProperty("concurrent_baseline_samples",
         static_cast<int64_t>(summary.baselineSamples.size()));
     testing::Test::RecordProperty("concurrent_reclaim_samples",
@@ -1167,41 +1313,39 @@ void RecordConcurrentProperties(const ConcurrentSummary &summary, const ReclaimP
     testing::Test::RecordProperty("concurrent_baseline_p95_us", summary.baselineP95);
     testing::Test::RecordProperty("concurrent_reclaim_p95_us", summary.reclaimP95);
     testing::Test::RecordProperty("concurrent_reclaim_max_us", summary.reclaimMax);
+    testing::Test::RecordProperty("concurrent_allowed_p95_us", summary.allowedP95);
     testing::Test::RecordProperty("concurrent_read_failures", static_cast<int64_t>(summary.readFailuresTotal));
-    testing::Test::RecordProperty("concurrent_write_failures", static_cast<int64_t>(writeFailures));
-    testing::Test::RecordProperty("concurrent_physical_drop_percent", probe.dropPercent);
-    testing::Test::RecordProperty("concurrent_physical_drop_observed", BoolText(probe.reclaimObserved));
-    testing::Test::RecordProperty("concurrent_reclaim_observed", BoolText(probe.reclaimObserved));
+    testing::Test::RecordProperty("concurrent_write_failures", static_cast<int64_t>(run.writeFailures));
+    testing::Test::RecordProperty("concurrent_peak_blocks_bytes",
+        static_cast<int64_t>(beforeDelete.dbBlockBytes));
+    testing::Test::RecordProperty("concurrent_final_blocks_bytes",
+        static_cast<int64_t>(run.finalUsage.dbBlockBytes));
+    testing::Test::RecordProperty("concurrent_physical_drop_percent", run.dropPercent);
+    testing::Test::RecordProperty("concurrent_physical_drop_observed", BoolText(run.reclaimObserved));
+    testing::Test::RecordProperty("concurrent_reclaim_observed", BoolText(run.reclaimObserved));
+    testing::Test::RecordProperty("concurrent_reclaim_during_reads", BoolText(run.reclaimDuringReads));
+    testing::Test::RecordProperty("concurrent_engine_shrink_enabled", BoolText(engineEnabled));
     testing::Test::RecordProperty("concurrent_checkpoint_ok", BoolText(checkpointOk));
-    testing::Test::RecordProperty("concurrent_evidence_gap", std::string("the engine internal reclamation "
-        "window is not directly observable; dbBlockBytes drop and per-phase read latency are used as the "
-        "closest evidence"));
 }
 
-int32_t RunConcurrentReaders(const std::shared_ptr<SingleKvStore> &store,
-    const std::shared_ptr<SingleStoreImpl> &impl, ReaderContext &context)
-{
-    auto readers = StartReaders(store, impl, context);
-    SleepMillis(CONCURRENT_BASELINE_MS);
-    context.reclaimPhase.store(true);
-    int32_t writeFailures = DeleteInReclaimWindow(store, context.deleteKeys);
-    context.reclaimPhase.store(false);
-    context.stop.store(true);
-    JoinReaders(readers);
-    return writeFailures;
-}
-
-void ExpectConcurrentResults(const ConcurrentSummary &summary, const ReclaimProbe &probe,
-    const DiskUsage &beforeDelete, int32_t writeFailures)
+void ExpectConcurrentResults(const ConcurrentSummary &summary, const ConcurrentReclaimRun &run,
+    const DiskUsage &beforeDelete)
 {
     EXPECT_FALSE(summary.baselineSamples.empty()) << "readers produced no baseline latency samples";
     EXPECT_FALSE(summary.reclaimSamples.empty()) << "readers produced no reclaim phase latency samples";
-    EXPECT_EQ(summary.readFailuresTotal, 0) << "readers observed errors while deletes were running";
-    EXPECT_EQ(writeFailures, 0) << "deletes failed during the reclaim window";
-    EXPECT_TRUE(probe.reclaimObserved) << "no shrink driven dbBlockBytes drop was observed (drop=" <<
-        probe.dropPercent << "%, before=" << beforeDelete.dbBlockBytes << ", final=" <<
-        probe.finalUsage.dbBlockBytes << ")";
-    EXPECT_GE(probe.dropPercent, CONCURRENT_RECLAIM_MIN_DROP_PERCENT) << "physical drop below " <<
+    EXPECT_GE(static_cast<int32_t>(summary.baselineSamples.size()), CONCURRENT_MIN_BASELINE_SAMPLES) <<
+        "baseline samples are too few: " << summary.baselineSamples.size();
+    EXPECT_GE(static_cast<int32_t>(summary.reclaimSamples.size()), CONCURRENT_MIN_RECLAIM_SAMPLES) <<
+        "reclaim phase samples are too few: " << summary.reclaimSamples.size();
+    EXPECT_EQ(summary.readFailuresTotal, 0) << "readers observed errors while deletes/reclaim were running";
+    EXPECT_EQ(run.writeFailures, 0) << "deletes failed during the reclaim window";
+    EXPECT_EQ(run.deletedKeys, CONCURRENT_RECLAIM_KEYS) << "only " << run.deletedKeys << " of " <<
+        CONCURRENT_RECLAIM_KEYS << " reclaim dataset keys were deleted";
+    EXPECT_TRUE(run.reclaimDuringReads) << "no shrink driven dbBlockBytes drop was observed while the "
+        "readers were still running (drop=" << run.dropPercent << "%, before=" <<
+        beforeDelete.dbBlockBytes << ", final=" << run.finalUsage.dbBlockBytes << ", reclaimMicros=" <<
+        run.reclaimMicros << ")";
+    EXPECT_GE(run.dropPercent, CONCURRENT_RECLAIM_MIN_DROP_PERCENT) << "physical drop below " <<
         CONCURRENT_RECLAIM_MIN_DROP_PERCENT << "% during the reclaim window";
     EXPECT_LE(summary.reclaimP95, summary.allowedP95) << "reclaim phase read P95 " << summary.reclaimP95 <<
         "us exceeded allowed " << summary.allowedP95 << "us (baseline P95=" << summary.baselineP95 << "us)";
@@ -1483,11 +1627,18 @@ HWTEST_F(EnableShrinkTest, ConcurrentReadDuringReclaim, TestSize.Level1)
     }
     ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     ASSERT_TRUE(WaitShrinkSettled(*impl, true, WAIT_SWITCH_TIMEOUT_MS));
+    bool engineEnabled = false;
+    if (!ReadEngineShrinkEnabled(*impl, engineEnabled)) {
+        CloseStore(storeId, store);
+        GTEST_SKIP() << "engine shrink GET is not available on this image";
+    }
+    ASSERT_TRUE(engineEnabled) << "the engine shrink switch is not actually enabled after SetShrinkEnable(true)";
 
-    // AC-1.5: 写入 1024 x 8KiB = 8MiB，删除 384 条（3MiB）释放超过 1MiB 阈值，回收窗口与读并发。
-    auto entries = MakeEntries(CONCURRENT_PREFIX, CONCURRENT_KEYS, CONCURRENT_VALUE_SIZE, true);
-    ASSERT_TRUE(PutBatchChunked(store, entries));
-    (void)CheckpointStore(impl);
+    // AC-1.5: A 段回收数据集整段删除触发引擎回收；B 段幸存数据集在回收期间被并发读取用于一致性校验。
+    std::vector<Entry> reclaimEntries;
+    std::vector<Entry> surviveEntries;
+    ASSERT_TRUE(PrepareConcurrentDatasets(store, reclaimEntries, surviveEntries));
+    bool checkpointBeforeDelete = CheckpointStore(impl);
     SleepMillis(SETTLE_INTERVAL_MS);
     DiskUsage beforeDelete;
     if (!QueryStoreDiskUsage(storeId, beforeDelete) || beforeDelete.dbBlockBytes == 0) {
@@ -1496,21 +1647,20 @@ HWTEST_F(EnableShrinkTest, ConcurrentReadDuringReclaim, TestSize.Level1)
     }
 
     ReaderContext context;
-    context.Init(entries);
-    int32_t writeFailures = RunConcurrentReaders(store, impl, context);
-    ConcurrentSummary summary = SummarizeReaderSamples(context);
+    context.Init(storeId, surviveEntries, reclaimEntries);
+    ConcurrentSummary summary;
+    ConcurrentReclaimRun run;
+    RunConcurrentPhase(store, impl, context, beforeDelete.dbBlockBytes, summary, run);
+
     bool checkpointAfterDelete = CheckpointStore(impl);
-    SleepMillis(SETTLE_INTERVAL_MS);
-    ReclaimProbe probe = WaitReclaimDrop(storeId, beforeDelete.dbBlockBytes, CONCURRENT_RECLAIM_TIMEOUT_MS,
-        CONCURRENT_RECLAIM_MIN_DROP_PERCENT);
-    VerifySurvivingEntries(store, impl, context);
-    RecordConcurrentProperties(summary, probe, writeFailures, checkpointAfterDelete);
+    VerifySurvivingEntries(store, context);
+    RecordConcurrentProperties(summary, run, beforeDelete, checkpointBeforeDelete && checkpointAfterDelete,
+        engineEnabled);
     CloseStore(storeId, store);
-    if (!probe.finalUsage.valid) {
+    if (!run.finalUsage.valid) {
         GTEST_SKIP() << "evidence gap: the RD database directory of the store is not measurable on this image";
     }
-
-    ExpectConcurrentResults(summary, probe, beforeDelete, writeFailures);
+    ExpectConcurrentResults(summary, run, beforeDelete);
 }
 
 HWTEST_F(EnableShrinkTest, DisableStopsNewReclaim, TestSize.Level1)
