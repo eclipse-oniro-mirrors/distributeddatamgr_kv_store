@@ -130,7 +130,7 @@ std::shared_ptr<SingleStoreImpl> SingleStoreImplMockTest::CreateKVStore(bool aut
                 dbManager->CloseKvStore(store);
             };
             auto dbStore = std::shared_ptr<DBStore>(store, release);
-            storeFactory->SetDbConfig(dbStore, options);
+            storeFactory->SetDbConfig(dbStore, options.walStartCheckpointSize);
             const Convertor &convertor = *(storeFactory->convertors_[options.kvStoreType]);
             kvStore = std::make_shared<SingleStoreImpl>(dbStore, appId, options, convertor);
         });
@@ -1212,8 +1212,8 @@ HWTEST_F(SingleStoreImplMockTest, WalCheckpointFieldDefault, testing::ext::TestS
     GTEST_LOG_(INFO) << "SingleStoreImplMockTest-begin WalCheckpointFieldDefault";
     try {
         Options options;
-        // Default value must be 204800 KB
-        EXPECT_EQ(options.walStartCheckpointSize, 204800);
+        // Default value must be CHECKPOINT_THRESHOLD_DEFAULT_KB
+        EXPECT_EQ(options.walStartCheckpointSize, CHECKPOINT_THRESHOLD_DEFAULT_KB);
         // Field is assignable
         options.walStartCheckpointSize = 8192;
         EXPECT_EQ(options.walStartCheckpointSize, 8192);
@@ -1241,7 +1241,7 @@ HWTEST_F(SingleStoreImplMockTest, WalCheckpointFallbackTooSmall, testing::ext::T
         options.securityLevel = S2;
         options.area = EL1;
         options.baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
-        options.walStartCheckpointSize = 16 - 1; // 15 < 16
+        options.walStartCheckpointSize = CHECKPOINT_THRESHOLD_MIN_KB - 1; // below MIN_KB
         Status status = SUCCESS;
         StoreParams storeParams;
         auto kvStore = storeFactory->GetOrOpenStore(testAppId, testStoreId, options, status, storeParams);
@@ -1271,7 +1271,7 @@ HWTEST_F(SingleStoreImplMockTest, WalCheckpointFallbackTooLarge, testing::ext::T
         options.securityLevel = S2;
         options.area = EL1;
         options.baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
-        options.walStartCheckpointSize = 524288 + 1; // 524289 > 524288
+        options.walStartCheckpointSize = CHECKPOINT_THRESHOLD_MAX_KB + 1; // above MAX_KB
         Status status = SUCCESS;
         StoreParams storeParams;
         auto kvStore = storeFactory->GetOrOpenStore(testAppId, testStoreId, options, status, storeParams);
@@ -1332,8 +1332,8 @@ HWTEST_F(SingleStoreImplMockTest, WalCheckpointDefaultWhenNotSet, testing::ext::
         options.securityLevel = S2;
         options.area = EL1;
         options.baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
-        // walStartCheckpointSize not set; uses default 204800 KB
-        EXPECT_EQ(options.walStartCheckpointSize, 204800);
+        // walStartCheckpointSize not set; uses default CHECKPOINT_THRESHOLD_DEFAULT_KB
+        EXPECT_EQ(options.walStartCheckpointSize, CHECKPOINT_THRESHOLD_DEFAULT_KB);
         Status status = INVALID_ARGUMENT;
         StoreParams storeParams;
         auto kvStore = storeFactory->GetOrOpenStore(testAppId, testStoreId, options, status, storeParams);
@@ -1363,7 +1363,7 @@ HWTEST_F(SingleStoreImplMockTest, GetOrOpenStoreAcceptsMinBoundary, testing::ext
         options.securityLevel = S2;
         options.area = EL1;
         options.baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
-        options.walStartCheckpointSize = 16; // 16 (boundary)
+        options.walStartCheckpointSize = CHECKPOINT_THRESHOLD_MIN_KB; // MIN_KB boundary
         Status status = INVALID_ARGUMENT;
         StoreParams storeParams;
         auto kvStore = storeFactory->GetOrOpenStore(testAppId, testStoreId, options, status, storeParams);
@@ -1393,7 +1393,7 @@ HWTEST_F(SingleStoreImplMockTest, GetOrOpenStoreAcceptsMaxBoundary, testing::ext
         options.securityLevel = S2;
         options.area = EL1;
         options.baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
-        options.walStartCheckpointSize = 524288; // 524288 (boundary)
+        options.walStartCheckpointSize = CHECKPOINT_THRESHOLD_MAX_KB; // MAX_KB boundary
         Status status = INVALID_ARGUMENT;
         StoreParams storeParams;
         auto kvStore = storeFactory->GetOrOpenStore(testAppId, testStoreId, options, status, storeParams);
@@ -1428,7 +1428,7 @@ HWTEST_F(SingleStoreImplMockTest, SetDbConfigReturnsErrorWhenPragmaFails, testin
         options.walStartCheckpointSize = 8192; // SetDbConfig calls Pragma(SET_MAX_LOG_LIMIT)
 
         // SetDbConfig is private; tests access it via the same mechanism as CreateKVStore (line 131).
-        auto status = storeFactory->SetDbConfig(fakeStore, options);
+        auto status = storeFactory->SetDbConfig(fakeStore, options.walStartCheckpointSize);
         EXPECT_NE(status, SUCCESS); // B4: Pragma failed → ZLOGE + ConvertStatus returns error
     } catch (...) {
         EXPECT_TRUE(false);

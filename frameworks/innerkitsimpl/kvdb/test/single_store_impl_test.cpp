@@ -165,7 +165,7 @@ std::shared_ptr<SingleStoreImpl> SingleStoreImplTest::CreateKVStore(bool autosyn
                 dbManager->CloseKvStore(store);
             };
             auto dbStore = std::shared_ptr<DBStore>(store, release);
-            storeFactory->SetDbConfig(dbStore, options);
+            storeFactory->SetDbConfig(dbStore, options.walStartCheckpointSize);
             const Convertor &convertor = *(storeFactory->convertors_[options.kvStoreType]);
             kvStore = std::make_shared<SingleStoreImpl>(dbStore, appId, options, convertor);
         });

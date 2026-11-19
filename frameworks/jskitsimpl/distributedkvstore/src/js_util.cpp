@@ -968,9 +968,9 @@ JSUtil::StatusMsg JSUtil::SetValue(
 
 static JSUtil::StatusMsg GetWalStartCheckpointSize(napi_env env, napi_value in, DistributedKv::Options& options)
 {
-    bool hasWalStartCheckpointSize = false;
-    napi_has_named_property(env, in, "walStartCheckpointSize", &hasWalStartCheckpointSize);
-    if (!hasWalStartCheckpointSize) {
+    bool hasCheckpoint = false;
+    napi_has_named_property(env, in, "walStartCheckpointSize", &hasCheckpoint);
+    if (!hasCheckpoint) {
         return napi_ok;
     }
     double threshold = 0;
