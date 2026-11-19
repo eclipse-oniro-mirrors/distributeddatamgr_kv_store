@@ -1229,18 +1229,24 @@ ConcurrentSummary SummarizeReaderSamples(const ReaderContext &context)
     return summary;
 }
 
-void RunConcurrentPhase(const std::shared_ptr<SingleKvStore> &store,
-    const std::shared_ptr<SingleStoreImpl> &impl, ReaderContext &context, uint64_t peakBytes,
-    ConcurrentSummary &summary, ConcurrentReclaimRun &run)
+struct ConcurrentPhaseResult {
+    ConcurrentSummary summary;
+    ConcurrentReclaimRun run;
+};
+
+ConcurrentPhaseResult RunConcurrentPhase(const std::shared_ptr<SingleKvStore> &store,
+    const std::shared_ptr<SingleStoreImpl> &impl, ReaderContext &context, uint64_t peakBytes)
 {
     auto readers = StartReaders(store, context);
     SleepMillis(CONCURRENT_BASELINE_MS);
     context.reclaimPhase.store(true);
-    run = DeleteAndWaitReclaim(store, impl, context, peakBytes);
+    ConcurrentPhaseResult result;
+    result.run = DeleteAndWaitReclaim(store, impl, context, peakBytes);
     context.reclaimPhase.store(false);
     context.stop.store(true);
     JoinReaders(readers);
-    summary = SummarizeReaderSamples(context);
+    result.summary = SummarizeReaderSamples(context);
+    return result;
 }
 
 void VerifySurvivingEntries(const std::shared_ptr<SingleKvStore> &store, const ReaderContext &context)
@@ -1634,19 +1640,17 @@ HWTEST_F(EnableShrinkTest, ConcurrentReadDuringReclaim, TestSize.Level1)
 
     ReaderContext context;
     context.Init(storeId, surviveEntries, reclaimEntries);
-    ConcurrentSummary summary;
-    ConcurrentReclaimRun run;
-    RunConcurrentPhase(store, impl, context, beforeDelete.dbBlockBytes, summary, run);
+    ConcurrentPhaseResult phase = RunConcurrentPhase(store, impl, context, beforeDelete.dbBlockBytes);
 
     bool checkpointAfterDelete = CheckpointStore(impl);
     VerifySurvivingEntries(store, context);
-    RecordConcurrentProperties(summary, run, beforeDelete, checkpointBeforeDelete && checkpointAfterDelete,
-        engineEnabled);
+    RecordConcurrentProperties(phase.summary, phase.run, beforeDelete,
+        checkpointBeforeDelete && checkpointAfterDelete, engineEnabled);
     CloseStore(storeId, store);
-    if (!run.finalUsage.valid) {
+    if (!phase.run.finalUsage.valid) {
         GTEST_SKIP() << "evidence gap: the RD database directory of the store is not measurable on this image";
     }
-    ExpectConcurrentResults(summary, run, beforeDelete);
+    ExpectConcurrentResults(phase.summary, phase.run, beforeDelete);
 }
 
 HWTEST_F(EnableShrinkTest, DisableStopsNewReclaim, TestSize.Level1)

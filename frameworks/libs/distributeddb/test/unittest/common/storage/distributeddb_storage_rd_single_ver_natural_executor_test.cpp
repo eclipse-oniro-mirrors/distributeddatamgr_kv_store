@@ -674,15 +674,6 @@ HWTEST_F(DistributedDBStorageRdSingleVerNaturalExecutorTest, PragmaGetPageSize_N
 }
 
 namespace {
-void CheckShrinkInvalidArguments()
-{
-    EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, nullptr), -E_INVALID_ARGS);
-    EXPECT_EQ(g_nullHandle->SetShrinkEnable(true), -E_INVALID_DB);
-    bool nullActual = true;
-    EXPECT_EQ(g_nullHandle->GetShrinkEnable(nullActual), -E_INVALID_DB);
-    EXPECT_TRUE(nullActual);
-}
-
 void CheckShrinkSetGetPassThrough()
 {
     g_shrinkSetCalls = 0;
@@ -731,7 +722,12 @@ void CheckShrinkErrorConversion()
 
 HWTEST_F(DistributedDBStorageRdSingleVerNaturalExecutorTest, PragmaShrinkSetGet001, TestSize.Level1)
 {
-    CheckShrinkInvalidArguments();
+    // Parameter validation: a null parameter and a null handle are rejected before touching the engine.
+    EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, nullptr), -E_INVALID_ARGS);
+    EXPECT_EQ(g_nullHandle->SetShrinkEnable(true), -E_INVALID_DB);
+    bool nullActual = true;
+    EXPECT_EQ(g_nullHandle->GetShrinkEnable(nullActual), -E_INVALID_DB);
+
     DocumentDB::GRD_APIInfo *apiInfo = DocumentDB::GetApiInfo();
     auto originalSet = apiInfo->KVSetDbShrinkEnableApi;
     auto originalGet = apiInfo->KVGetDbShrinkEnableApi;

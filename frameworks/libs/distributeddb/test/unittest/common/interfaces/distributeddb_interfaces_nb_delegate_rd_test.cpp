@@ -41,10 +41,13 @@ namespace {
     bool g_shrinkGetValue = false;
     int32_t g_shrinkSetResult = GRD_OK;
     int32_t g_shrinkGetResult = GRD_OK;
+    std::vector<std::string> g_shrinkCallTrace;
+    constexpr int32_t INVALID_SHRINK_OPERATION = 100;
 
     int32_t FakeKVSetDbShrinkEnable(GRD_DB *db, bool enable)
     {
         (void)db;
+        g_shrinkCallTrace.push_back("SET");
         g_shrinkSetValue = enable;
         g_shrinkSetCalls++;
         return g_shrinkSetResult;
@@ -53,6 +56,7 @@ namespace {
     int32_t FakeKVGetDbShrinkEnable(GRD_DB *db, bool *enable)
     {
         (void)db;
+        g_shrinkCallTrace.push_back("GET");
         g_shrinkGetCalls++;
         if (g_shrinkGetResult == GRD_OK && enable != nullptr) {
             *enable = g_shrinkGetValue;
@@ -315,31 +319,39 @@ HWTEST_F(DistributedDBInterfacesNBDelegateRdTest, ShrinkSetGet001, TestSize.Leve
     apiInfo->KVGetDbShrinkEnableApi = FakeKVGetDbShrinkEnable;
     g_shrinkSetCalls = 0;
     g_shrinkGetCalls = 0;
+    g_shrinkCallTrace.clear();
 
-    ShrinkParam setParam;
-    setParam.operation = ShrinkOperation::SET;
-    setParam.enable = true;
-    PragmaData setData = static_cast<PragmaData>(&setParam);
-    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SHRINK, setData), OK);
+    ShrinkParam param;
+    param.operation = ShrinkOperation::SET;
+    param.enable = true;
+    PragmaData paramData = static_cast<PragmaData>(&param);
+    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SHRINK, paramData), OK);
     EXPECT_EQ(g_shrinkSetCalls, 1);
     EXPECT_TRUE(g_shrinkSetValue);
-    EXPECT_EQ(g_shrinkGetCalls, 0);
+    EXPECT_EQ(g_shrinkCallTrace, (std::vector<std::string>{"SET"}));
+
+    param.enable = false;
+    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SHRINK, paramData), OK);
+    EXPECT_EQ(g_shrinkSetCalls, 2);
+    EXPECT_FALSE(g_shrinkSetValue);
 
     g_shrinkGetValue = true;
-    ShrinkParam getParam;
-    getParam.operation = ShrinkOperation::GET;
-    getParam.enable = false;
-    PragmaData getData = static_cast<PragmaData>(&getParam);
-    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SHRINK, getData), OK);
+    param.operation = ShrinkOperation::GET;
+    param.enable = false;
+    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SHRINK, paramData), OK);
     EXPECT_EQ(g_shrinkGetCalls, 1);
-    EXPECT_TRUE(getParam.enable);
+    EXPECT_TRUE(param.enable);
+
+    g_shrinkGetValue = false;
+    param.enable = true;
+    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SHRINK, paramData), OK);
+    EXPECT_EQ(g_shrinkGetCalls, 2);
+    EXPECT_FALSE(param.enable);
 
     PragmaData nullData = nullptr;
     EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SHRINK, nullData), INVALID_ARGS);
-    ShrinkParam invalidParam;
-    invalidParam.operation = static_cast<ShrinkOperation>(100);
-    PragmaData invalidData = static_cast<PragmaData>(&invalidParam);
-    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SHRINK, invalidData), INVALID_ARGS);
+    param.operation = static_cast<ShrinkOperation>(INVALID_SHRINK_OPERATION);
+    EXPECT_EQ(g_kvNbDelegatePtr->Pragma(SHRINK, paramData), INVALID_ARGS);
 
     apiInfo->KVSetDbShrinkEnableApi = originalSet;
     apiInfo->KVGetDbShrinkEnableApi = originalGet;
