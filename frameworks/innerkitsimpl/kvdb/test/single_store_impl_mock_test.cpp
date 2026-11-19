@@ -92,11 +92,15 @@ public:
     DBStatus Pragma(PragmaCmd cmd, PragmaData &paramData) override
     {
         if (cmd == GET_PAGE_SIZE) {
+            // Test guard: production code must not probe the engine on the open path anymore.
+            // Count the calls so tests can assert zero; keep filling the page size so this mock
+            // remains usable by a future GetPageSize case.
             auto pageSize = static_cast<int32_t *>(paramData);
             if (pageSize != nullptr) {
                 *pageSize = 4;
             }
-            return probeStatus_;
+            pageSizeCalls_++;
+            return DBStatus::OK;
         }
         if (cmd != SHRINK) {
             return DBStatus::NOT_SUPPORT;
@@ -173,8 +177,6 @@ public:
         return DBStatus::NOT_SUPPORT;
     }
 
-    void SetProbeStatus(DBStatus status) { probeStatus_ = status; }
-
     void BlockSet()
     {
         std::lock_guard<std::mutex> lock(gateMutex_);
@@ -221,10 +223,10 @@ public:
     }
 
     std::atomic<int> setCalls_ { 0 };
+    std::atomic<int> pageSizeCalls_ { 0 };
     std::atomic<bool> actual_ { false };
 
 private:
-    DBStatus probeStatus_ = DBStatus::OK;
     bool blocked_ = false;
     std::mutex gateMutex_;
     std::condition_variable gateCondition_;
@@ -232,10 +234,11 @@ private:
 };
 
 std::shared_ptr<SingleStoreImpl> CreateShrinkStore(const std::shared_ptr<ShrinkMockDelegate> &delegate,
-    Convertor &convertor, KvStoreType type = KvStoreType::LOCAL_ONLY)
+    Convertor &convertor, KvStoreType type = KvStoreType::LOCAL_ONLY, bool isPublic = false)
 {
     Options options;
     options.kvStoreType = type;
+    options.isPublic = isPublic;
     options.securityLevel = S2;
     options.area = EL1;
     options.baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
@@ -244,6 +247,45 @@ std::shared_ptr<SingleStoreImpl> CreateShrinkStore(const std::shared_ptr<ShrinkM
     AppId appId = { "SingleStoreImplTest" };
     return std::make_shared<SingleStoreImpl>(delegate, appId, options, convertor);
 }
+
+// Minimal concrete SingleKvStore used only to exercise the base-class default
+// SetShrinkEnable implementation (F2: enable -> NOT_SUPPORT, disable -> SUCCESS).
+class DefaultShrinkKvStoreFake : public SingleKvStore {
+public:
+    Status Get(const Key &, Value &) override { return Status::NOT_SUPPORT; }
+    Status GetEntries(const Key &, std::vector<Entry> &) const override { return Status::NOT_SUPPORT; }
+    Status GetEntries(const DataQuery &, std::vector<Entry> &) const override { return Status::NOT_SUPPORT; }
+    Status GetResultSet(const Key &, std::shared_ptr<KvStoreResultSet> &) const override
+    {
+        return Status::NOT_SUPPORT;
+    }
+    Status GetResultSet(const DataQuery &, std::shared_ptr<KvStoreResultSet> &) const override
+    {
+        return Status::NOT_SUPPORT;
+    }
+    Status CloseResultSet(std::shared_ptr<KvStoreResultSet> &) override { return Status::NOT_SUPPORT; }
+    Status GetCount(const DataQuery &, int &) const override { return Status::NOT_SUPPORT; }
+    Status RemoveDeviceData(const std::string &) override { return Status::NOT_SUPPORT; }
+    Status GetSecurityLevel(SecurityLevel &) const override { return Status::NOT_SUPPORT; }
+    Status Sync(const std::vector<std::string> &, SyncMode, uint32_t) override { return Status::NOT_SUPPORT; }
+    Status RegisterSyncCallback(std::shared_ptr<KvStoreSyncCallback>) override { return Status::NOT_SUPPORT; }
+    Status UnRegisterSyncCallback() override { return Status::NOT_SUPPORT; }
+    Status SetSyncParam(const KvSyncParam &) override { return Status::NOT_SUPPORT; }
+    Status GetSyncParam(KvSyncParam &) override { return Status::NOT_SUPPORT; }
+    Status SetCapabilityEnabled(bool) const override { return Status::NOT_SUPPORT; }
+    Status SetCapabilityRange(const std::vector<std::string> &, const std::vector<std::string> &) const override
+    {
+        return Status::NOT_SUPPORT;
+    }
+    Status SubscribeWithQuery(const std::vector<std::string> &, const DataQuery &) override
+    {
+        return Status::NOT_SUPPORT;
+    }
+    Status UnsubscribeWithQuery(const std::vector<std::string> &, const DataQuery &) override
+    {
+        return Status::NOT_SUPPORT;
+    }
+};
 
 class SingleStoreImplMockTest : public testing::Test {
 public:
@@ -1716,16 +1758,73 @@ HWTEST_F(SingleStoreImplMockTest, DisableSkipsNotStartedTask, testing::ext::Test
     EXPECT_EQ(target->Close(true), 0);
 }
 
-HWTEST_F(SingleStoreImplMockTest, ProbeFallsBackToSqlite, testing::ext::TestSize.Level1)
+HWTEST_F(SingleStoreImplMockTest, NoEngineProbeOnOpen, testing::ext::TestSize.Level1)
 {
     auto delegate = std::make_shared<ShrinkMockDelegate>();
-    delegate->SetProbeStatus(DBStatus::NOT_SUPPORT);
     Convertor convertor;
     auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    EXPECT_EQ(delegate->pageSizeCalls_.load(), 0);
+    EXPECT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    ASSERT_TRUE(delegate->WaitSetCalls(1));
+    ASSERT_TRUE(WaitShrinkState(store, true, 0));
+    EXPECT_EQ(delegate->pageSizeCalls_.load(), 0);
+    EXPECT_EQ(store->Close(true), 0);
+}
+
+HWTEST_F(SingleStoreImplMockTest, IsPublicLocalOnlyNotSupported, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor, KvStoreType::LOCAL_ONLY, true);
     ASSERT_NE(store, nullptr);
     EXPECT_EQ(store->SetShrinkEnable(true), NOT_SUPPORT);
     EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
     EXPECT_EQ(delegate->setCalls_.load(), 0);
+    EXPECT_EQ(delegate->pageSizeCalls_.load(), 0);
+    auto state = GetShrinkState(store);
+    EXPECT_FALSE(state.desired);
+    EXPECT_EQ(state.pending, 0u);
     EXPECT_EQ(store->Close(true), 0);
+}
+
+HWTEST_F(SingleStoreImplMockTest, LocalOnlyFallbackAccepted, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    delegate->SetNextStatus(DBStatus::NOT_SUPPORT);
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    EXPECT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    ASSERT_TRUE(delegate->WaitSetCalls(1));
+    ASSERT_TRUE(WaitShrinkState(store, true, 0));
+    EXPECT_FALSE(delegate->actual_.load());
+    EXPECT_EQ(store->Close(true), 0);
+}
+
+HWTEST_F(SingleStoreImplMockTest, NonLocalOnlyTypesNotSupported, testing::ext::TestSize.Level1)
+{
+    const std::vector<KvStoreType> types = { KvStoreType::SINGLE_VERSION, KvStoreType::DEVICE_COLLABORATION };
+    for (auto type : types) {
+        auto delegate = std::make_shared<ShrinkMockDelegate>();
+        Convertor convertor;
+        auto store = CreateShrinkStore(delegate, convertor, type);
+        ASSERT_NE(store, nullptr);
+        EXPECT_EQ(store->SetShrinkEnable(true), NOT_SUPPORT);
+        EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
+        EXPECT_EQ(delegate->setCalls_.load(), 0);
+        EXPECT_EQ(delegate->pageSizeCalls_.load(), 0);
+        auto state = GetShrinkState(store);
+        EXPECT_FALSE(state.desired);
+        EXPECT_EQ(state.pending, 0u);
+        EXPECT_EQ(store->Close(true), 0);
+    }
+}
+
+HWTEST_F(SingleStoreImplMockTest, DefaultSetShrinkEnableContract, testing::ext::TestSize.Level1)
+{
+    DefaultShrinkKvStoreFake store;
+    EXPECT_EQ(store.SetShrinkEnable(true), NOT_SUPPORT);
+    EXPECT_EQ(store.SetShrinkEnable(false), SUCCESS);
 }
 } // namespace OHOS::DistributedKv

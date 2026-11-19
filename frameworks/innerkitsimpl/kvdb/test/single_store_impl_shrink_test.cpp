@@ -105,7 +105,8 @@ public:
     void SetUp(void);
     void TearDown(void);
 
-    std::shared_ptr<SingleKvStore> CreateStore(const std::string &storeId, KvStoreType type);
+    std::shared_ptr<SingleKvStore> CreateStore(const std::string &storeId, KvStoreType type,
+        bool isPublic = false);
     void CloseStore(const std::string &storeId, std::shared_ptr<SingleKvStore> &store);
     static std::shared_ptr<SingleStoreImpl> AsImpl(const std::shared_ptr<SingleKvStore> &store);
 
@@ -134,10 +135,11 @@ void SingleStoreImplShrinkTest::TearDown(void)
 }
 
 std::shared_ptr<SingleKvStore> SingleStoreImplShrinkTest::CreateStore(
-    const std::string &storeId, KvStoreType type)
+    const std::string &storeId, KvStoreType type, bool isPublic)
 {
     Options options;
     options.kvStoreType = type;
+    options.isPublic = isPublic;
     options.securityLevel = S1;
     options.area = EL1;
     options.backup = true;
@@ -178,25 +180,19 @@ HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableSQLiteNotSupported, TestSize.
     EXPECT_EQ(state.pendingTasks, 0u);
 }
 
-HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableCapabilityBit, TestSize.Level1)
+HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableIsPublicNotSupported, TestSize.Level1)
 {
-    auto store = CreateStore("CapabilityShrinkStore", KvStoreType::LOCAL_ONLY);
+    auto store = CreateStore("PublicLocalOnlyShrinkStore", KvStoreType::LOCAL_ONLY, true);
     ASSERT_NE(store, nullptr);
+    EXPECT_EQ(store->SetShrinkEnable(true), NOT_SUPPORT);
+    EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
 
-    impl->SetShrinkSupported(false);
-    EXPECT_EQ(store->SetShrinkEnable(true), NOT_SUPPORT);
-    EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
     auto state = TakeShrinkState(*impl);
     EXPECT_FALSE(state.desiredEnabled);
     EXPECT_EQ(state.pendingTasks, 0u);
-
-    EXPECT_EQ(store->SetShrinkEnable(true), NOT_SUPPORT);
-    auto retryState = TakeShrinkState(*impl);
-    EXPECT_FALSE(retryState.desiredEnabled);
-    EXPECT_EQ(retryState.pendingTasks, 0u);
-    CloseStore("CapabilityShrinkStore", store);
+    CloseStore("PublicLocalOnlyShrinkStore", store);
 }
 
 HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableDeviceNotSupported, TestSize.Level1)

@@ -82,7 +82,6 @@ public:
         std::map<std::string, DistributedKv::Status> &status) override;
     Status Rekey() override;
     Status SetShrinkEnable(bool enable) override;
-    void SetShrinkSupported(bool supported);
     void GetShrinkStateForTest(bool &desiredEnabled, uint32_t &pendingTasks) const;
     void OnRemoteDied() override;
     bool IsRebuild() override;
@@ -174,7 +173,9 @@ private:
     std::mutex notifyMutex_;
     uint64_t notifyExpiredTime_ = 0;
     std::shared_ptr<DBStore> dbStore_ = nullptr;
-    bool shrinkSupported_ = false;
+    // Whether this store accepts shrink requests. Decided by store type and isPublic only;
+    // the actual engine capability is intentionally not probed on the open path.
+    bool shrinkAccepted_ = false;
     ShrinkManager shrinkManager_;
     std::shared_ptr<SyncObserver> syncObserver_ = nullptr;
     ConcurrentMap<uintptr_t, std::pair<uint32_t, std::shared_ptr<ObserverBridge>>> observers_;

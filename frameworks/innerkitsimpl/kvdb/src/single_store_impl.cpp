@@ -57,12 +57,10 @@ SingleStoreImpl::SingleStoreImpl(
     isClientSync_ = options.isClientSync;
     syncObserver_ = std::make_shared<SyncObserver>();
     roleType_ = options.role;
-    if (options.kvStoreType == KvStoreType::LOCAL_ONLY) {
-        int32_t pageSize = 0;
-        DistributedDB::PragmaData data = static_cast<DistributedDB::PragmaData>(&pageSize);
-        shrinkSupported_ =
-            dbStore_->Pragma(DistributedDB::GET_PAGE_SIZE, data) == DistributedDB::DBStatus::OK;
-    }
+    // Accept by store type only. Do not probe the actual engine on the open path. If the
+    // background Pragma rejects the switch, NOT_SUPPORT/BUSY/TIMEOUT are logged as warnings;
+    // DB_ERROR (e.g. missing shrink symbols) is logged with DFX (see review E3).
+    shrinkAccepted_ = (options.kvStoreType == KvStoreType::LOCAL_ONLY) && !options.isPublic;
     dataType_ = options.dataType;
     encrypt_ = options.encrypt;
     securityLevel_ = options.securityLevel;
@@ -924,11 +922,12 @@ Status SingleStoreImpl::SetShrinkEnable(bool enable)
         ZLOGE("db:%{public}s already closed!", StoreUtil::Anonymous(storeId_).c_str());
         return ALREADY_CLOSED;
     }
-    if (!shrinkSupported_) {
+    if (!shrinkAccepted_) {
         if (!enable) {
             return SUCCESS;
         }
-        ZLOGI("shrink is not supported, store:%{public}s", StoreUtil::Anonymous(storeId_).c_str());
+        ZLOGI("shrink is not supported for this store type, store:%{public}s",
+            StoreUtil::Anonymous(storeId_).c_str());
         return NOT_SUPPORT;
     }
     if (shrinkManager_.SetDesired(enable)) {
@@ -972,13 +971,6 @@ void SingleStoreImpl::RunShrink(bool enable)
             static_cast<int32_t>(status), StoreUtil::Anonymous(storeId_).c_str());
         ReportDBFaultEvent(StoreUtil::ConvertStatus(status), "RunShrink");
     }
-}
-
-void SingleStoreImpl::SetShrinkSupported(bool supported)
-{
-    shrinkSupported_ = supported;
-    ZLOGD("shrink capability updated, supported:%{public}d store:%{public}s", static_cast<int32_t>(supported),
-        StoreUtil::Anonymous(storeId_).c_str());
 }
 
 void SingleStoreImpl::GetShrinkStateForTest(bool &desiredEnabled, uint32_t &pendingTasks) const
