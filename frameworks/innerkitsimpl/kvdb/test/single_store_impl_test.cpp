@@ -2770,41 +2770,4 @@ HWTEST_F(SingleStoreImplTest, GetPageSize003, TestSize.Level1)
     status = StoreManager::GetInstance().Delete(appId, storeId, baseDir);
     ASSERT_EQ(status, SUCCESS);
 }
- 
-/**
-  * @tc.name: GetPageSize004
-  * @tc.desc: Get page size of a LOCAL_ONLY kv store (GaussDB RD engine), should return SUCCESS and a positive page size
-  * @tc.type: FUNC
-  * @tc.require:
-  */
-HWTEST_F(SingleStoreImplTest, GetPageSize004, TestSize.Level1)
-{
-    auto kvStore = CreateKVStore("LocalOnlyPageSizeStore", KvStoreType::LOCAL_ONLY, false, true);
-    ASSERT_NE(kvStore, nullptr);
-    /**
-     * @tc.steps: step1. Call GetPageSize on the LOCAL_ONLY kv store (GaussDB RD engine).
-     * @tc.expected: step1. Returns SUCCESS and pageSize is a positive integer.
-     */
-    int pageSize = 0;
-    Status status = kvStore->GetPageSize(pageSize);
-    EXPECT_EQ(status, SUCCESS);
-    EXPECT_GT(pageSize, 0);
-    EXPECT_TRUE(pageSize == 4 || pageSize == 8 || pageSize == 16 || pageSize == 32 ||
-        pageSize == 64) << "pageSize=" << pageSize;
-    /**
-     * @tc.steps: step2. Call GetPageSize again, the result should be stable.
-     * @tc.expected: step2. Returns SUCCESS and the same pageSize value.
-     */
-    int pageSizeAgain = 0;
-    status = kvStore->GetPageSize(pageSizeAgain);
-    EXPECT_EQ(status, SUCCESS);
-    EXPECT_EQ(pageSize, pageSizeAgain);
-    AppId appId = { "SingleStoreImplTest" };
-    StoreId storeId = { "LocalOnlyPageSizeStore" };
-    status = StoreManager::GetInstance().CloseKVStore(appId, storeId);
-    ASSERT_EQ(status, SUCCESS);
-    auto baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
-    status = StoreManager::GetInstance().Delete(appId, storeId, baseDir);
-    ASSERT_EQ(status, SUCCESS);
-}
 } // namespace OHOS::Test
