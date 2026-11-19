@@ -102,8 +102,8 @@ constexpr int32_t PERF_BATCH_SAMPLES = 200;
 constexpr int32_t PERF_BATCH_SIZE = 8;
 constexpr size_t PERF_VALUE_SIZE = 1024;
 
+// AC-1.7 strict tolerance: P95/throughput degradation must stay within 10% (no absolute jitter floor).
 constexpr int64_t PERF_DEGRADE_LIMIT_PERCENT = 10;
-constexpr int64_t PERF_ABS_JITTER_US = 200;
 constexpr int64_t PERF_RECLAIM_MIN_DROP_PERCENT = 10;
 
 constexpr int32_t PERCENTILE_95 = 95;
@@ -840,10 +840,9 @@ PerfMedians ComputePerfMedians(const PerfSamples &perf, const DiskUsage &peak, c
     medians.writeDegradePercent = medians.plainWrite > 0 ?
         (medians.plainWrite - medians.enabledWrite) * PERCENT_SCALE / medians.plainWrite : 0;
     medians.reclaimDropPercent = DropPercent(peak.dbBlockBytes, finalUsage.dbBlockBytes);
-    medians.deleteAllowed = std::max(medians.plainDeleteP95 * PERF_DEGRADE_LIMIT_PERCENT / PERCENT_SCALE,
-        PERF_ABS_JITTER_US);
-    medians.batchAllowed = std::max(medians.plainBatchP95 * PERF_DEGRADE_LIMIT_PERCENT / PERCENT_SCALE,
-        PERF_ABS_JITTER_US);
+    // AC-1.7 strict gate: the allowed degradation is exactly 10% of the plain baseline.
+    medians.deleteAllowed = medians.plainDeleteP95 * PERF_DEGRADE_LIMIT_PERCENT / PERCENT_SCALE;
+    medians.batchAllowed = medians.plainBatchP95 * PERF_DEGRADE_LIMIT_PERCENT / PERCENT_SCALE;
     return medians;
 }
 
@@ -858,15 +857,17 @@ PerfMedians RunPerfMeasurement(const PerfContext &context, PerfSamples &perf,
 
 void ExpectPerfResults(const PerfMedians &medians, const DiskUsage &peak, const DiskUsage &finalUsage)
 {
+    ASSERT_GT(medians.plainDeleteP95, 0) << "plain Delete P95 is 0; the baseline is not measurable";
+    ASSERT_GT(medians.plainBatchP95, 0) << "plain DeleteBatch P95 is 0; the baseline is not measurable";
     EXPECT_GE(medians.reclaimDropPercent, PERF_RECLAIM_MIN_DROP_PERCENT) <<
         "the enabled store did not show engine reclamation during the measured workload (peak=" <<
         peak.dbBlockBytes << ", final=" << finalUsage.dbBlockBytes << ")";
     EXPECT_LE(medians.enabledDeleteP95 - medians.plainDeleteP95, medians.deleteAllowed) <<
         "Delete P95 degraded by " << medians.deleteDegradePercent << "% (" << medians.plainDeleteP95 <<
-        " -> " << medians.enabledDeleteP95 << " us)";
+        " -> " << medians.enabledDeleteP95 << " us, allowed +" << medians.deleteAllowed << " us)";
     EXPECT_LE(medians.enabledBatchP95 - medians.plainBatchP95, medians.batchAllowed) <<
         "DeleteBatch P95 degraded by " << medians.batchDegradePercent << "% (" << medians.plainBatchP95 <<
-        " -> " << medians.enabledBatchP95 << " us)";
+        " -> " << medians.enabledBatchP95 << " us, allowed +" << medians.batchAllowed << " us)";
     EXPECT_GE(medians.enabledWrite, medians.plainWrite * (PERCENT_SCALE - PERF_DEGRADE_LIMIT_PERCENT) /
         PERCENT_SCALE) << "PutBatch throughput degraded by " << medians.writeDegradePercent << "% (" <<
         medians.plainWrite << " -> " << medians.enabledWrite << " bytes/sec)";
@@ -877,6 +878,7 @@ void RecordPerfTimingProperties(int64_t acceptUs, int64_t disableUs, const PerfS
     testing::Test::RecordProperty("switch_accept_us", acceptUs);
     testing::Test::RecordProperty("switch_disable_us", disableUs);
     testing::Test::RecordProperty("perf_rounds", static_cast<int64_t>(PERF_ROUNDS));
+    testing::Test::RecordProperty("perf_tolerance", std::string("strict_10_percent_no_abs_jitter"));
     testing::Test::RecordProperty("perf_checkpoint_ok", BoolText(perf.checkpointsOk));
 }
 
@@ -885,9 +887,13 @@ void RecordPerfMeasurementProperties(const PerfMedians &medians, const DiskUsage
 {
     testing::Test::RecordProperty("delete_p95_plain_us", medians.plainDeleteP95);
     testing::Test::RecordProperty("delete_p95_enabled_us", medians.enabledDeleteP95);
+    testing::Test::RecordProperty("delete_p95_diff_us", medians.enabledDeleteP95 - medians.plainDeleteP95);
+    testing::Test::RecordProperty("delete_p95_allowed_us", medians.deleteAllowed);
     testing::Test::RecordProperty("delete_p95_degrade_percent", medians.deleteDegradePercent);
     testing::Test::RecordProperty("batch_p95_plain_us", medians.plainBatchP95);
     testing::Test::RecordProperty("batch_p95_enabled_us", medians.enabledBatchP95);
+    testing::Test::RecordProperty("batch_p95_diff_us", medians.enabledBatchP95 - medians.plainBatchP95);
+    testing::Test::RecordProperty("batch_p95_allowed_us", medians.batchAllowed);
     testing::Test::RecordProperty("batch_p95_degrade_percent", medians.batchDegradePercent);
     testing::Test::RecordProperty("write_plain_bytes_per_sec", medians.plainWrite);
     testing::Test::RecordProperty("write_enabled_bytes_per_sec", medians.enabledWrite);
