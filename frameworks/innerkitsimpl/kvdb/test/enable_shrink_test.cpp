@@ -214,7 +214,7 @@ bool CheckpointStore(const std::shared_ptr<SingleStoreImpl> &impl)
     return impl->dbStore_->Pragma(DistributedDB::EXEC_CHECKPOINT, data) == DistributedDB::DBStatus::OK;
 }
 
-bool ProbeShrinkCapability(const std::shared_ptr<SingleStoreImpl> &impl, std::string &reason)
+bool EnsureShrinkEngineReadyForTest(const std::shared_ptr<SingleStoreImpl> &impl, std::string &reason)
 {
     if (impl == nullptr || impl->dbStore_ == nullptr) {
         reason = "shrink capability probe failed: store is closed";
@@ -486,7 +486,7 @@ HWTEST_F(EnableShrinkTest, SetShrinkEnablePhysicalReclaim, TestSize.Level1)
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
     std::string probeReason;
-    if (!ProbeShrinkCapability(impl, probeReason)) {
+    if (!EnsureShrinkEngineReadyForTest(impl, probeReason)) {
         CloseStore(storeId, store);
         GTEST_SKIP() << probeReason;
     }
@@ -606,7 +606,7 @@ HWTEST_F(EnableShrinkTest, NoEnableNoReclaim, TestSize.Level1)
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
     std::string probeReason;
-    if (!ProbeShrinkCapability(impl, probeReason)) {
+    if (!EnsureShrinkEngineReadyForTest(impl, probeReason)) {
         CloseStore(storeId, store);
         GTEST_SKIP() << probeReason;
     }
@@ -656,7 +656,7 @@ HWTEST_F(EnableShrinkTest, NoDeleteNoReclaim, TestSize.Level1)
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
     std::string probeReason;
-    if (!ProbeShrinkCapability(impl, probeReason)) {
+    if (!EnsureShrinkEngineReadyForTest(impl, probeReason)) {
         CloseStore(storeId, store);
         GTEST_SKIP() << probeReason;
     }
@@ -711,7 +711,7 @@ HWTEST_F(EnableShrinkTest, BelowThresholdNoReclaim, TestSize.Level1)
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
     std::string probeReason;
-    if (!ProbeShrinkCapability(impl, probeReason)) {
+    if (!EnsureShrinkEngineReadyForTest(impl, probeReason)) {
         CloseStore(storeId, store);
         GTEST_SKIP() << probeReason;
     }
@@ -774,7 +774,7 @@ HWTEST_F(EnableShrinkTest, ConcurrentReadDuringReclaim, TestSize.Level1)
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
     std::string probeReason;
-    if (!ProbeShrinkCapability(impl, probeReason)) {
+    if (!EnsureShrinkEngineReadyForTest(impl, probeReason)) {
         CloseStore(storeId, store);
         GTEST_SKIP() << probeReason;
     }
@@ -1010,7 +1010,7 @@ HWTEST_F(EnableShrinkTest, DisableStopsNewReclaim, TestSize.Level1)
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
     std::string probeReason;
-    if (!ProbeShrinkCapability(impl, probeReason)) {
+    if (!EnsureShrinkEngineReadyForTest(impl, probeReason)) {
         CloseStore(storeId, store);
         GTEST_SKIP() << probeReason;
     }
@@ -1069,7 +1069,7 @@ HWTEST_F(EnableShrinkTest, ToggleDuringDeletePhysicalReclaim, TestSize.Level1)
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
     std::string probeReason;
-    if (!ProbeShrinkCapability(impl, probeReason)) {
+    if (!EnsureShrinkEngineReadyForTest(impl, probeReason)) {
         CloseStore(storeId, store);
         GTEST_SKIP() << probeReason;
     }
@@ -1197,7 +1197,7 @@ HWTEST_F(EnableShrinkTest, DeleteP95WithShrinkEnabled, TestSize.Level1)
     auto impl = AsImpl(enabled);
     ASSERT_NE(impl, nullptr);
     std::string probeReason;
-    if (!ProbeShrinkCapability(impl, probeReason)) {
+    if (!EnsureShrinkEngineReadyForTest(impl, probeReason)) {
         CloseStore(plainId, plain);
         CloseStore(enabledId, enabled);
         GTEST_SKIP() << probeReason;

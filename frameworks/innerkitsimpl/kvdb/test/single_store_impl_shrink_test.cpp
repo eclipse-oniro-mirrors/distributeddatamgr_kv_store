@@ -65,7 +65,7 @@ bool WaitShrinkSettled(const SingleStoreImpl &store, bool desiredEnabled,
     return state.desiredEnabled == desiredEnabled && state.pendingTasks == 0;
 }
 
-bool ProbeShrinkCapability(const std::shared_ptr<SingleStoreImpl> &impl, std::string &reason)
+bool EnsureShrinkEngineReadyForTest(const std::shared_ptr<SingleStoreImpl> &impl, std::string &reason)
 {
     if (impl == nullptr || impl->dbStore_ == nullptr) {
         reason = "shrink capability probe failed: store or delegate is null";
@@ -240,7 +240,7 @@ HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableDisableBeforeTaskStarts, Test
     auto impl = AsImpl(store);
     ASSERT_NE(impl, nullptr);
     std::string probeReason;
-    if (!ProbeShrinkCapability(impl, probeReason)) {
+    if (!EnsureShrinkEngineReadyForTest(impl, probeReason)) {
         CloseStore("ToggleShrinkStore", store);
         GTEST_SKIP() << probeReason;
     }
