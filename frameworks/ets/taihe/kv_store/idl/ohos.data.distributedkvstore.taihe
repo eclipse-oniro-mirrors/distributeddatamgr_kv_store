@@ -117,6 +117,7 @@ struct Options {
     securityLevel: Optional<SecurityLevel>;
     schema: Optional<Schema>;
     rootDir: Optional<String>;
+    walStartCheckpointSize: Optional<i32>;
 }
 
 struct BackupConfig {

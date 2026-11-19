@@ -29,6 +29,10 @@
 namespace OHOS::DistributedKv {
 using namespace DistributedDB;
 static constexpr const char *KEY_SPLIT = "###";
+// Checkpoint threshold bounds in KB, range [16, 524288] (16KB to 512MB).
+static constexpr int32_t CHECKPOINT_THRESHOLD_MIN_KB = 16;
+static constexpr int32_t CHECKPOINT_THRESHOLD_MAX_KB = 524288;
+static constexpr int32_t CHECKPOINT_THRESHOLD_DEFAULT_KB = 204800;
 StoreFactory &StoreFactory::GetInstance()
 {
     static StoreFactory instance;
@@ -58,10 +62,16 @@ StoreFactory::~StoreFactory()
     }
 }
 
-Status StoreFactory::SetDbConfig(std::shared_ptr<DBStore> dbStore)
+Status StoreFactory::SetDbConfig(std::shared_ptr<DBStore> dbStore, const Options &options)
 {
+    int32_t thresholdKB = options.walStartCheckpointSize;
+    if (thresholdKB < CHECKPOINT_THRESHOLD_MIN_KB || thresholdKB > CHECKPOINT_THRESHOLD_MAX_KB) {
+        ZLOGW("walStartCheckpointSize:%{public}d KB out of range, using default", thresholdKB);
+        thresholdKB = CHECKPOINT_THRESHOLD_DEFAULT_KB;
+    }
+    uint64_t maxLogSizeBytes = static_cast<uint64_t>(thresholdKB) * 1024ULL; // KB -> bytes
     PragmaData data =
-        static_cast<DistributedDB::PragmaData>(const_cast<void *>(static_cast<const void *>(&MAX_WAL_SIZE)));
+        static_cast<DistributedDB::PragmaData>(const_cast<void *>(static_cast<const void *>(&maxLogSizeBytes)));
     auto status = dbStore->Pragma(DistributedDB::SET_MAX_LOG_LIMIT, data);
     if (status != DistributedDB::DBStatus::OK) {
         ZLOGE("Failed to set max log limit! status:%{public}d", status);
@@ -124,7 +134,7 @@ std::shared_ptr<SingleKvStore> StoreFactory::GetOrOpenStore(const AppId &appId, 
                 }
                 auto release = [dbManager](auto *store) { dbManager->CloseKvStore(store); };
                 auto dbStore = std::shared_ptr<DBStore>(store, release);
-                SetDbConfig(dbStore);
+                SetDbConfig(dbStore, options);
                 const Convertor &convertor = *(convertors_[options.kvStoreType]);
                 kvStore = std::make_shared<SingleStoreImpl>(dbStore, appId, options, convertor);
             });

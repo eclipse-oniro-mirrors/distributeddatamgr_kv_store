@@ -58,7 +58,7 @@ private:
     bool ExecuteRekey(const std::string &storeId, const std::string &path, DBPassword &dbPassword, DBStore *dbStore);
     Status IsPwdValid(const std::string &storeId, std::shared_ptr<DBManager> dbManager, const Options &options,
         DBPassword &dbPassword);
-    Status SetDbConfig(std::shared_ptr<DBStore> dbStore);
+    Status SetDbConfig(std::shared_ptr<DBStore> dbStore, const Options &options);
     std::string GenerateKey(const std::string &keyPrefix, const std::string &storeId) const;
     Status CloseInner(const AppId &appId, const StoreId &storeId, const std::string &keyPrefix, bool isForce);
     ConcurrentMap<std::string, std::shared_ptr<DBManager>> dbManagers_;

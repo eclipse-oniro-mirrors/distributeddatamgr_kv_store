@@ -23,6 +23,7 @@
 #include "napi_queue.h"
 #include "types.h"
 #include "securec.h"
+#include <cmath>
 
 namespace OHOS::DistributedKVStore {
 constexpr int32_t STR_MAX_LENGTH = 4096;
@@ -965,6 +966,24 @@ JSUtil::StatusMsg JSUtil::SetValue(
     return statusMsg;
 }
 
+static JSUtil::StatusMsg GetWalStartCheckpointSize(napi_env env, napi_value in, DistributedKv::Options& options)
+{
+    bool hasWalStartCheckpointSize = false;
+    napi_has_named_property(env, in, "walStartCheckpointSize", &hasWalStartCheckpointSize);
+    if (!hasWalStartCheckpointSize) {
+        return napi_ok;
+    }
+    double threshold = 0;
+    JSUtil::StatusMsg statusMsg =
+        JSUtil::GetNamedProperty(env, in, "walStartCheckpointSize", threshold, true);
+    ASSERT(statusMsg.status == napi_ok, "get walStartCheckpointSize param failed", statusMsg);
+    // NaN/Infinity would cause UB in static_cast; skip and keep default 204800.
+    if (std::isfinite(threshold)) {
+        options.walStartCheckpointSize = static_cast<int32_t>(threshold);
+    }
+    return napi_ok;
+}
+
 /* napi_value <-> DistributedKv::Options */
 JSUtil::StatusMsg JSUtil::GetValue(napi_env env, napi_value in, DistributedKv::Options& options)
 {
@@ -1011,6 +1030,9 @@ JSUtil::StatusMsg JSUtil::GetValue(napi_env env, napi_value in, DistributedKv::O
             options.isCustomDir = true;
         }
     }
+
+    statusMsg = GetWalStartCheckpointSize(env, in, options);
+    ASSERT(statusMsg.status == napi_ok, "get walStartCheckpointSize param failed", statusMsg);
     return napi_ok;
 }
 

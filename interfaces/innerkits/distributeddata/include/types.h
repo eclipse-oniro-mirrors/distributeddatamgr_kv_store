@@ -593,6 +593,11 @@ struct Options {
      * Set Whether the caller is application.
     */
     bool isApplication = false;
+    /**
+     * Size threshold in KB for starting an automatic checkpoint. Range [16, 524288]. Default 204800.
+     * Larger values reduce checkpoint frequency but increase WAL file size and peak memory usage.
+    */
+    int32_t walStartCheckpointSize = 204800;  // size threshold in KB for starting checkpoint
 };
 
 /**
