@@ -902,23 +902,33 @@ private:
     int64_t dropPercent_ = 0;
 };
 
-bool WaitReclaimQuiescent(const std::string &storeId, int64_t timeoutMs)
-{
+struct QuiesceState {
     uint64_t lastBytes = 0;
     int32_t stableSamples = 0;
+};
+
+bool IsReclaimQuiescent(QuiesceState &state, const std::string &storeId)
+{
+    DiskUsage usage;
+    if (!QueryStoreDiskUsage(storeId, usage)) {
+        return false;
+    }
+    if (usage.dbBlockBytes != state.lastBytes) {
+        state.lastBytes = usage.dbBlockBytes;
+        state.stableSamples = 0;
+        return false;
+    }
+    ++state.stableSamples;
+    return state.stableSamples >= PERF_QUIESCE_STABLE_SAMPLES;
+}
+
+bool WaitReclaimQuiescent(const std::string &storeId, int64_t timeoutMs)
+{
+    QuiesceState state;
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
     while (std::chrono::steady_clock::now() < deadline) {
-        DiskUsage usage;
-        if (QueryStoreDiskUsage(storeId, usage)) {
-            if (usage.dbBlockBytes == lastBytes) {
-                ++stableSamples;
-                if (stableSamples >= PERF_QUIESCE_STABLE_SAMPLES) {
-                    return true;
-                }
-            } else {
-                lastBytes = usage.dbBlockBytes;
-                stableSamples = 0;
-            }
+        if (IsReclaimQuiescent(state, storeId)) {
+            return true;
         }
         SleepMillis(PERF_QUIESCE_POLL_MS);
     }
