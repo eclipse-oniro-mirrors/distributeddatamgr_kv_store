@@ -115,7 +115,7 @@ constexpr int64_t PERF_RECLAIM_MIN_DROP_PERCENT = 10;
 
 constexpr int32_t PERCENTILE_95 = 95;
 constexpr int64_t PERCENT_SCALE = 100;
-constexpr int32_t DROP_PERCENT_DECIMALS = 2;
+constexpr int32_t PERCENT_DECIMALS = 2;
 constexpr uint64_t RECLAIM_DROP_DIVISOR = 10;
 constexpr size_t EVEN_SAMPLE_DIVISOR = 2;
 constexpr int64_t MICROS_PER_MILLI = 1000;
@@ -600,7 +600,7 @@ void PrintPhysicalReclaimEvidence(const DiskUsage &peak, const ReclaimProbe &pro
     double dropPercent = peakBytes == 0 ? 0.0 :
         static_cast<double>(reclaimedBytes) * PERCENT_SCALE / static_cast<double>(peakBytes);
     std::cout << "[AC-1.1][physical] peak=" << peakBytes << " bytes (" << std::fixed <<
-        std::setprecision(DROP_PERCENT_DECIMALS) <<
+        std::setprecision(PERCENT_DECIMALS) <<
         static_cast<double>(peakBytes) / BYTES_PER_MIB << " MiB), final=" << finalBytes <<
         " bytes (" << static_cast<double>(finalBytes) / BYTES_PER_MIB << " MiB), reclaimed=" <<
         reclaimedBytes << " bytes (" <<
@@ -952,6 +952,34 @@ void RecordPerfMeasurementProperties(const PerfMedians &medians, const DiskUsage
     testing::Test::RecordProperty("enabled_reclaim_final_all_bytes",
         static_cast<int64_t>(finalUsage.blockBytes));
     testing::Test::RecordProperty("enabled_reclaim_drop_percent", medians.reclaimDropPercent);
+}
+
+void PrintPerfEvidence(const PerfMedians &medians)
+{
+    double deleteDegrade = medians.plainDeleteP95 > 0 ?
+        static_cast<double>(medians.enabledDeleteP95 - medians.plainDeleteP95) * PERCENT_SCALE /
+        static_cast<double>(medians.plainDeleteP95) : 0.0;
+    double batchDegrade = medians.plainBatchP95 > 0 ?
+        static_cast<double>(medians.enabledBatchP95 - medians.plainBatchP95) * PERCENT_SCALE /
+        static_cast<double>(medians.plainBatchP95) : 0.0;
+    double writeDegrade = medians.plainWrite > 0 ?
+        static_cast<double>(medians.plainWrite - medians.enabledWrite) * PERCENT_SCALE /
+        static_cast<double>(medians.plainWrite) : 0.0;
+    std::cout << "[AC-1.7][perf] rounds=" << PERF_ROUNDS << " delete_samples=" <<
+        PERF_DELETE_SAMPLES << " batch_samples=" << PERF_BATCH_SAMPLES << std::endl;
+    std::cout << "[AC-1.7][perf] delete_p95_us plain=" << medians.plainDeleteP95 << " enabled=" <<
+        medians.enabledDeleteP95 << " degrade=" << std::fixed <<
+        std::setprecision(PERCENT_DECIMALS) << deleteDegrade << "% limit=" <<
+        PERF_DEGRADE_LIMIT_PERCENT << "%" << std::endl;
+    std::cout << "[AC-1.7][perf] delete_batch_p95_us plain=" << medians.plainBatchP95 <<
+        " enabled=" << medians.enabledBatchP95 << " degrade=" << batchDegrade << "% limit=" <<
+        PERF_DEGRADE_LIMIT_PERCENT << "%" << std::endl;
+    std::cout << "[AC-1.7][perf] write_throughput_bps plain=" << medians.plainWrite << " (" <<
+        static_cast<double>(medians.plainWrite) / BYTES_PER_MIB << " MiB/s) enabled=" <<
+        medians.enabledWrite << " (" <<
+        static_cast<double>(medians.enabledWrite) / BYTES_PER_MIB << " MiB/s) degrade=" <<
+        writeDegrade << "% limit=" << PERF_DEGRADE_LIMIT_PERCENT << "%" <<
+        std::defaultfloat << std::endl;
 }
 
 struct ConcurrentSummary {
@@ -1836,6 +1864,7 @@ HWTEST_F(EnableShrinkTest, DeleteP95WithShrinkEnabled, TestSize.Level1)
     ASSERT_TRUE(WaitShrinkSettled(*impl, false, WAIT_SWITCH_TIMEOUT_MS));
     RecordPerfTimingProperties(acceptUs, disableUs, perf);
     RecordPerfMeasurementProperties(medians, perf.enabledPeak, enabledFinal);
+    PrintPerfEvidence(medians);
     EXPECT_EQ(disableStatus, SUCCESS);
     EXPECT_LE(acceptUs, MAX_ACCEPT_MILLIS * MICROS_PER_MILLI);
     EXPECT_LE(disableUs, MAX_ACCEPT_MILLIS * MICROS_PER_MILLI);
