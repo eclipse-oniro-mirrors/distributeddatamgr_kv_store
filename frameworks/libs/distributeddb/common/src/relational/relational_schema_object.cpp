@@ -167,6 +167,16 @@ void RelationalSchemaObject::RemoveTrackerSchema(const TrackerSchema &schema)
     GenerateTrackerSchemaString();
 }
 
+void RelationalSchemaObject::MergeTrackerSchema(const TrackerSchema &schema)
+{
+    if (!schema.isTrackAction && schema.trackerColNames.empty()) {
+        // if isTrackAction be false and trackerColNames is empty, will remove the tracker schema.
+        RemoveTrackerSchema(schema);
+    } else {
+        InsertTrackerSchema(schema);
+    }
+}
+
 void RelationalSchemaObject::GenerateTrackerSchemaString()
 {
     schemaString_ = {};

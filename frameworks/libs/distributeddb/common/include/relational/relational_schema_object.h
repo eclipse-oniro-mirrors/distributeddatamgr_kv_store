@@ -56,6 +56,7 @@ public:
 
     void InsertTrackerSchema(const TrackerSchema &schema);
     void RemoveTrackerSchema(const TrackerSchema &schema);
+    void MergeTrackerSchema(const TrackerSchema &schema);
     TrackerTable GetTrackerTable(const std::string &tableName) const;
     int ParseFromTrackerSchemaString(const std::string &inSchemaString);
     const TableInfoMap &GetTrackerTables() const;
