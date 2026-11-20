@@ -1184,7 +1184,8 @@ void PrintPerfRoundEvidence(const PerfSamples &perf)
         int64_t enabledBatch = perf.enabledBatchP95s[index];
         int64_t plainWrite = perf.plainWriteBytesPerSec[index];
         int64_t enabledWrite = perf.enabledWriteBytesPerSec[index];
-        std::cout << "[AC-1.7][perf][round " << index + 1 << "] delete_us plain=" << plainDelete <<
+        size_t roundNumber = index + 1;
+        std::cout << "[AC-1.7][perf][round " << roundNumber << "] delete_us plain=" << plainDelete <<
             " enabled=" << enabledDelete << " delta=" << std::fixed <<
             std::setprecision(PERCENT_DECIMALS) << PerfDeltaPercent(plainDelete, enabledDelete) <<
             "% batch_us plain=" << plainBatch << " enabled=" << enabledBatch << " delta=" <<
@@ -1203,7 +1204,7 @@ void PrintPerfRoundEvidence(const PerfSamples &perf)
             enabledObserved = perf.enabledReclaimObservations[index].observed;
             enabledDrop = perf.enabledReclaimObservations[index].dropPercent;
         }
-        std::cout << "[AC-1.7][perf][round " << index + 1 << "] reclaim plain_observed=" <<
+        std::cout << "[AC-1.7][perf][round " << roundNumber << "] reclaim plain_observed=" <<
             BoolText(plainObserved) << " plain_drop=" << plainDrop << "% enabled_observed=" <<
             BoolText(enabledObserved) << " enabled_drop=" << enabledDrop << "%" << std::endl;
     }
