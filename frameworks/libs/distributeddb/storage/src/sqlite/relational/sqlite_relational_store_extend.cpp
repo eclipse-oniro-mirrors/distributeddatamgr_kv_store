@@ -428,6 +428,8 @@ void SQLiteRelationalStore::TrackerIntegrityRepair(const TrackerSchema &trackerS
     trackerTable.CheckMissingTrigger(tableInfo, dbHandle);
     // Check whether cursor exists in meta table, init it later in TrackerRepairImpl if absent.
     trackerTable.CheckMissingCursor(dbHandle, handle->IsMemory());
+    // Check whether any log row has a null cursor, refresh it later in TrackerRepairImpl if so.
+    trackerTable.CheckNullCursorLog(dbHandle);
     // Try clear historical mismatched log, which usually do not occur and apply to tracker table only.
     if (isNoTableInSchema) {
         trackerTable.CheckMismatchedDataKeys(dbHandle);
@@ -480,6 +482,9 @@ void SQLiteRelationalStore::TrackerRepairImpl(TrackerTable &trackerTable, const 
         }
         if (repairInfo.existDirtyLog) {
             (void) SQLiteRelationalUtils::CleanDirtyLog(db, tableName, obj);
+        }
+        if (repairInfo.existNullCursorLog) {
+            (void) SQLiteRelationalUtils::UpdateNullCursor(db, tableName);
         }
         ReleaseHandle(handle);
         LOGI("[TrackerIntegrityRepair] repair finish");

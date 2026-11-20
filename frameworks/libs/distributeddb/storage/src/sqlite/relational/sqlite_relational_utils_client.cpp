@@ -205,6 +205,43 @@ int SQLiteRelationalUtils::UpdateExistCursor(const TableInfo &tableInfo, const G
     return errCode;
 }
 
+int SQLiteRelationalUtils::UpdateNullCursor(sqlite3 *db, const std::string &tableName)
+{
+    const std::string logTable = DBCommon::GetLogTableName(tableName);
+    std::string countSql = "SELECT COUNT(1) FROM " + logTable + " WHERE cursor IS NULL AND data_key != -1";
+    int64_t nullCount = 0;
+    int errCode = SQLiteUtils::GetCountBySql(db, countSql, nullCount);
+    if (errCode != E_OK) {
+        LOGE("[RDBUtils] Get null cursor count[%s] errCode[%d]",
+            DBCommon::StringMiddleMaskingWithLen(tableName).c_str(), errCode);
+        return errCode;
+    }
+    if (nullCount <= 0) {
+        return E_OK;
+    }
+    // Reuse the same ranking strategy as UpdateExistCursor: meta cursor + ROW_NUMBER() ordered by rowid.
+    std::string updateSQL = std::string("WITH ranked AS (") +
+        "SELECT " + std::string(DBConstant::SQLITE_INNER_ROWID) + " AS id," +
+        CloudStorageUtils::GetSelectIncCursorSql(tableName) + " + ROW_NUMBER() OVER (ORDER BY rowid) AS new_cursor " +
+        "FROM " + logTable + " WHERE cursor IS NULL AND data_key != -1" +
+        ")" +
+        "UPDATE " + logTable + " SET cursor=ranked.new_cursor FROM ranked WHERE ranked.id=" +
+        logTable + "." + std::string(DBConstant::SQLITE_INNER_ROWID);
+    errCode = SQLiteUtils::ExecuteRawSQL(db, updateSQL);
+    if (errCode != E_OK) {
+        LOGE("[RDBUtils] Update[%s] null cursor errCode[%d]", DBCommon::StringMiddleMaskingWithLen(tableName).c_str(),
+            errCode);
+        return errCode;
+    }
+    updateSQL = CloudStorageUtils::GetCursorIncSql(tableName, nullCount);
+    errCode = SQLiteUtils::ExecuteRawSQL(db, updateSQL);
+    if (errCode != E_OK) {
+        LOGE("[RDBUtils] Update[%s] meta cursor errCode[%d]", DBCommon::StringMiddleMaskingWithLen(tableName).c_str(),
+            errCode);
+    }
+    return errCode;
+}
+
 int SQLiteRelationalUtils::GeneMismatchLogInfo(const std::string &identity, const TableInfo &tableInfo,
     std::unique_ptr<SqliteLogTableManager> &logMgrPtr, GenLogParam &param)
 {

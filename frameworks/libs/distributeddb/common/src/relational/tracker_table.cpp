@@ -457,10 +457,21 @@ void TrackerTable::CheckMissingCursor(sqlite3 *db, bool isMemory)
     }
 }
 
+void TrackerTable::CheckNullCursorLog(sqlite3 *db)
+{
+    std::string sql = "SELECT COUNT(1) FROM " + DBCommon::GetLogTableName(tableName_) +
+        " WHERE cursor IS NULL AND data_key != -1";
+    if (!SQLiteRelationalUtils::ExecuteCheckSql(db, sql).second) {
+        return;
+    }
+    repairInfo_.existNullCursorLog = true;
+}
+
 bool TrackerTable::IsNeedRepair()
 {
     return (!repairInfo_.createTriggerSqls.empty() || !repairInfo_.misDataKeys.empty() ||
-        repairInfo_.existNullExtend || repairInfo_.existDirtyLog || repairInfo_.missingCursor);
+        repairInfo_.existNullExtend || repairInfo_.existDirtyLog || repairInfo_.missingCursor ||
+        repairInfo_.existNullCursorLog);
 }
 
 void TrackerTable::Repair(std::function<void(const RepairInfo &, const std::string &,

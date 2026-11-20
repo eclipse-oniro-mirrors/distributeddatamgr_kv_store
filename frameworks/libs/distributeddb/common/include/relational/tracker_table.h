@@ -38,6 +38,7 @@ public:
         bool existNullExtend = false;
         bool existDirtyLog = false;
         bool missingCursor = false;
+        bool existNullCursorLog = false;
     };
 
     std::string GetTableName() const;
@@ -74,6 +75,7 @@ public:
     void CheckNullExtendLog(sqlite3 *db);
     void CheckExistDirtyLog(sqlite3 *db);
     void CheckMissingCursor(sqlite3 *db, bool isMemory);
+    void CheckNullCursorLog(sqlite3 *db);
     bool IsNeedRepair();
     void Repair(std::function<void(const RepairInfo &, const std::string &, const std::set<std::string> &)> repairFunc);
     static std::string IsEmptyExtendSQL();

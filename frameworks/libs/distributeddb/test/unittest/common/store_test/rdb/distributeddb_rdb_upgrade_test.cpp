@@ -265,4 +265,82 @@ HWTEST_F(DistributedDBRDBUpgradeTest, UpgradeTracker005, TestSize.Level0)
     EXPECT_EQ(SetTrackerTables(info1, {DEVICE_SYNC_TABLE}), E_OK);
     EXPECT_EQ(CountTableData(info1, metaTableName, cursorCond), 1);
 }
+
+/**
+ * @tc.name: UpgradeTracker006
+ * @tc.desc: Test null cursor log rows are refreshed during tracker integrity repair.
+ * @tc.type: FUNC
+ * @tc.author: zqq
+ */
+HWTEST_F(DistributedDBRDBUpgradeTest, UpgradeTracker006, TestSize.Level0)
+{
+    /**
+     * @tc.steps: step1. Init delegate and set tracker schema, insert local data.
+     * @tc.expected: step1. Ok
+     */
+    ASSERT_NO_FATAL_FAILURE(InitUpgradeDelegate());
+    auto info1 = GetStoreInfo1();
+    EXPECT_EQ(SetTrackerTables(info1, {DEVICE_SYNC_TABLE}), E_OK);
+    int chkCnt = 5;
+    InsertLocalDBData(0, chkCnt, info1);
+    const std::string logTable = DBCommon::GetLogTableName(DEVICE_SYNC_TABLE);
+    const std::string nullCursorCond = "cursor IS NULL AND data_key != -1";
+    EXPECT_EQ(CountTableData(info1, logTable, nullCursorCond), 0);
+    /**
+     * @tc.steps: step2. Set cursor to NULL on log rows to simulate corrupted cursor.
+     * @tc.expected: step2. Null cursor rows exist.
+     */
+    std::string sql = "UPDATE " + logTable + " SET cursor=NULL WHERE data_key != -1";
+    EXPECT_EQ(ExecuteSQL(sql, info1), E_OK);
+    EXPECT_EQ(CountTableData(info1, logTable, nullCursorCond), chkCnt);
+    /**
+     * @tc.steps: step3. Set tracker tables with same schema to trigger TrackerIntegrityRepair.
+     * @tc.expected: step3. All null cursor rows refreshed.
+     */
+    EXPECT_EQ(SetTrackerTables(info1, {DEVICE_SYNC_TABLE}), E_OK);
+    EXPECT_EQ(CountTableData(info1, logTable, nullCursorCond), 0);
+}
+
+/**
+ * @tc.name: UpgradeTracker007
+ * @tc.desc: Test missing cursor and null cursor log rows are repaired together.
+ * @tc.type: FUNC
+ * @tc.author: zqq
+ */
+HWTEST_F(DistributedDBRDBUpgradeTest, UpgradeTracker007, TestSize.Level0)
+{
+    /**
+     * @tc.steps: step1. Init delegate and set tracker schema, insert local data.
+     * @tc.expected: step1. Ok
+     */
+    ASSERT_NO_FATAL_FAILURE(InitUpgradeDelegate());
+    auto info1 = GetStoreInfo1();
+    EXPECT_EQ(SetTrackerTables(info1, {DEVICE_SYNC_TABLE}), E_OK);
+    int chkCnt = 5;
+    InsertLocalDBData(0, chkCnt, info1);
+    const std::string logTable = DBCommon::GetLogTableName(DEVICE_SYNC_TABLE);
+    const std::string metaTableName = std::string(DBConstant::RELATIONAL_PREFIX) + "metadata";
+    const std::string cursorCond = "key=x'" + DBCommon::TransferStringToHex(DBCommon::GetCursorKey(DEVICE_SYNC_TABLE)) +
+        "'";
+    const std::string nullCursorCond = "cursor IS NULL AND data_key != -1";
+    EXPECT_EQ(CountTableData(info1, metaTableName, cursorCond), 1);
+    EXPECT_EQ(CountTableData(info1, logTable, nullCursorCond), 0);
+    /**
+     * @tc.steps: step2. Delete meta cursor and null log cursors to simulate both corruptions.
+     * @tc.expected: step2. Meta cursor row gone and null cursor log rows exist.
+     */
+    std::string sql = "DELETE FROM " + metaTableName + " WHERE " + cursorCond;
+    EXPECT_EQ(ExecuteSQL(sql, info1), E_OK);
+    EXPECT_EQ(CountTableData(info1, metaTableName, cursorCond), 0);
+    sql = "UPDATE " + logTable + " SET cursor=NULL WHERE data_key != -1";
+    EXPECT_EQ(ExecuteSQL(sql, info1), E_OK);
+    EXPECT_EQ(CountTableData(info1, logTable, nullCursorCond), chkCnt);
+    /**
+     * @tc.steps: step3. Set tracker tables with same schema to trigger TrackerIntegrityRepair.
+     * @tc.expected: step3. Meta cursor re-initialized and null cursor log rows refreshed.
+     */
+    EXPECT_EQ(SetTrackerTables(info1, {DEVICE_SYNC_TABLE}), E_OK);
+    EXPECT_EQ(CountTableData(info1, metaTableName, cursorCond), 1);
+    EXPECT_EQ(CountTableData(info1, logTable, nullCursorCond), 0);
+}
 }
