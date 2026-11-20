@@ -1353,8 +1353,10 @@ public:
     void SetUp(void);
     void TearDown(void);
 
-    std::shared_ptr<SingleKvStore> OpenStore(const std::string &storeId, KvStoreType type, bool encrypt = false);
-    std::shared_ptr<SingleKvStore> CreateStore(const std::string &storeId, KvStoreType type, bool encrypt = false);
+    std::shared_ptr<SingleKvStore> OpenStore(const std::string &storeId, KvStoreType type, bool encrypt = false,
+        Status *openStatus = nullptr);
+    std::shared_ptr<SingleKvStore> CreateStore(const std::string &storeId, KvStoreType type, bool encrypt = false,
+        Status *openStatus = nullptr);
     void CloseStore(const std::string &storeId, std::shared_ptr<SingleKvStore> &store);
     static std::shared_ptr<SingleStoreImpl> AsImpl(const std::shared_ptr<SingleKvStore> &store);
 };
@@ -1373,7 +1375,8 @@ void EnableShrinkTest::SetUp(void) {}
 
 void EnableShrinkTest::TearDown(void) {}
 
-std::shared_ptr<SingleKvStore> EnableShrinkTest::OpenStore(const std::string &storeId, KvStoreType type, bool encrypt)
+std::shared_ptr<SingleKvStore> EnableShrinkTest::OpenStore(const std::string &storeId, KvStoreType type,
+    bool encrypt, Status *openStatus)
 {
     Options options = {};
     options.kvStoreType = type;
@@ -1385,16 +1388,20 @@ std::shared_ptr<SingleKvStore> EnableShrinkTest::OpenStore(const std::string &st
     AppId appId = { APP_ID };
     StoreId id = { storeId };
     Status status = STORE_NOT_FOUND;
-    return StoreManager::GetInstance().GetKVStore(appId, id, options, status);
+    auto store = StoreManager::GetInstance().GetKVStore(appId, id, options, status);
+    if (openStatus != nullptr) {
+        *openStatus = status;
+    }
+    return store;
 }
 
 std::shared_ptr<SingleKvStore> EnableShrinkTest::CreateStore(const std::string &storeId, KvStoreType type,
-    bool encrypt)
+    bool encrypt, Status *openStatus)
 {
     AppId appId = { APP_ID };
     StoreId id = { storeId };
     (void)StoreManager::GetInstance().Delete(appId, id, BASE_DIR);
-    return OpenStore(storeId, type, encrypt);
+    return OpenStore(storeId, type, encrypt, openStatus);
 }
 
 void EnableShrinkTest::CloseStore(const std::string &storeId, std::shared_ptr<SingleKvStore> &store)
@@ -1451,10 +1458,16 @@ HWTEST_F(EnableShrinkTest, SetShrinkEnablePhysicalReclaim, TestSize.Level1)
 HWTEST_F(EnableShrinkTest, EncryptStoreShrinkCompatibility, TestSize.Level1)
 {
     const std::string storeId = "EnableShrinkEncrypted";
-    auto store = CreateStore(storeId, KvStoreType::LOCAL_ONLY, true);
+    Status openStatus = STORE_NOT_FOUND;
+    auto store = CreateStore(storeId, KvStoreType::LOCAL_ONLY, true, &openStatus);
+    RecordProperty("encrypt_open_status", static_cast<int64_t>(static_cast<int32_t>(openStatus)));
     if (store == nullptr) {
-        GTEST_SKIP() << "environment limitation: an encrypted LOCAL_ONLY store is not available on this image";
+        RecordProperty("encrypt_local_only_available", static_cast<int64_t>(0));
+        EXPECT_TRUE(openStatus == NOT_SUPPORT || openStatus == CRYPT_ERROR) <<
+            "unexpected open status: " << static_cast<int32_t>(openStatus);
+        return;
     }
+    RecordProperty("encrypt_local_only_available", static_cast<int64_t>(1));
     Status enableStatus = store->SetShrinkEnable(true);
     RecordProperty("encrypt_enable_status", static_cast<int64_t>(static_cast<int32_t>(enableStatus)));
     EXPECT_TRUE(enableStatus == SUCCESS || enableStatus == NOT_SUPPORT);
