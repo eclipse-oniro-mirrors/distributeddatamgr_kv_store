@@ -23,6 +23,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <iomanip>
+#include <iostream>
 #include <map>
 #include <memory>
 #include <string>
@@ -46,6 +48,7 @@ constexpr const char *APP_ID = "SingleStoreImplTest";
 
 constexpr int32_t MAX_BATCH_ENTRIES = 128; // DBConstant::MAX_BATCH_SIZE in distributeddb
 constexpr uint64_t DISK_BLOCK_SIZE_BYTES = 512;
+constexpr double BYTES_PER_MIB = 1024.0 * 1024.0;
 
 constexpr int64_t WAIT_SWITCH_TIMEOUT_MS = 5000;
 
@@ -58,11 +61,12 @@ constexpr int64_t MAX_ACCEPT_MILLIS = 1000;
 
 constexpr uint64_t HOUSEKEEPING_DROP_PERCENT = 25;
 
-constexpr int32_t RECLAIM_WRITE_BATCHES = 20;
+constexpr int32_t RECLAIM_WRITE_BATCHES = 32;
 constexpr int32_t RECLAIM_KEYS_PER_BATCH = MAX_BATCH_ENTRIES;
 constexpr size_t RECLAIM_VALUE_SIZE = 8 * 1024;
 constexpr int32_t RECLAIM_PEAK_SCANS = 3;
-constexpr int64_t RECLAIM_MIN_DROP_PERCENT = 85;
+constexpr int32_t RECLAIM_FINAL_SCANS = 5;
+constexpr int64_t RECLAIM_MIN_DROP_PERCENT = 90;
 
 constexpr int32_t RECLAIM_KEYS_PER_ROUND = 256;
 
@@ -111,6 +115,7 @@ constexpr int64_t PERF_RECLAIM_MIN_DROP_PERCENT = 10;
 
 constexpr int32_t PERCENTILE_95 = 95;
 constexpr int64_t PERCENT_SCALE = 100;
+constexpr int32_t DROP_PERCENT_DECIMALS = 2;
 constexpr uint64_t RECLAIM_DROP_DIVISOR = 10;
 constexpr size_t EVEN_SAMPLE_DIVISOR = 2;
 constexpr int64_t MICROS_PER_MILLI = 1000;
@@ -454,6 +459,24 @@ ReclaimProbe WaitReclaimDrop(const std::string &storeId, uint64_t peakBytes, int
     return probe;
 }
 
+void SettleReclaimProbe(const std::string &storeId, uint64_t peakBytes, ReclaimProbe &probe)
+{
+    if (peakBytes == 0) {
+        return;
+    }
+    for (int32_t scan = 0; scan < RECLAIM_FINAL_SCANS; ++scan) {
+        SleepMillis(SETTLE_INTERVAL_MS);
+        DiskUsage current;
+        if (!QueryStoreDiskUsage(storeId, current)) {
+            continue;
+        }
+        if (!probe.finalUsage.valid || current.dbBlockBytes < probe.finalUsage.dbBlockBytes) {
+            probe.finalUsage = current;
+            probe.dropPercent = DropPercent(peakBytes, current.dbBlockBytes);
+        }
+    }
+}
+
 struct BatchShape {
     int32_t batches;
     int32_t keysPerBatch;
@@ -566,6 +589,23 @@ void RecordPhysicalReclaimProperties(const DiskUsage &peak, const ReclaimProbe &
     testing::Test::RecordProperty("physical_reclaim_observed", BoolText(probe.reclaimObserved));
     testing::Test::RecordProperty("physical_checkpoint_before_delete", BoolText(checkpointBeforeDelete));
     testing::Test::RecordProperty("physical_checkpoint_after_delete", BoolText(checkpointAfterDelete));
+}
+
+void PrintPhysicalReclaimEvidence(const DiskUsage &peak, const ReclaimProbe &probe,
+    int64_t thresholdPercent)
+{
+    uint64_t peakBytes = peak.dbBlockBytes;
+    uint64_t finalBytes = probe.finalUsage.dbBlockBytes;
+    uint64_t reclaimedBytes = peakBytes > finalBytes ? peakBytes - finalBytes : 0;
+    double dropPercent = peakBytes == 0 ? 0.0 :
+        static_cast<double>(reclaimedBytes) * PERCENT_SCALE / static_cast<double>(peakBytes);
+    std::cout << "[AC-1.1][physical] peak=" << peakBytes << " bytes (" << std::fixed <<
+        std::setprecision(DROP_PERCENT_DECIMALS) <<
+        static_cast<double>(peakBytes) / BYTES_PER_MIB << " MiB), final=" << finalBytes <<
+        " bytes (" << static_cast<double>(finalBytes) / BYTES_PER_MIB << " MiB), reclaimed=" <<
+        reclaimedBytes << " bytes (" <<
+        static_cast<double>(reclaimedBytes) / BYTES_PER_MIB << " MiB), drop=" << dropPercent <<
+        "% (threshold=" << thresholdPercent << "%)" << std::defaultfloat << std::endl;
 }
 
 struct TogglePhase {
@@ -1433,7 +1473,7 @@ HWTEST_F(EnableShrinkTest, SetShrinkEnablePhysicalReclaim, TestSize.Level1)
     ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
     ASSERT_TRUE(WaitShrinkSettled(*impl, true, WAIT_SWITCH_TIMEOUT_MS));
 
-    // AC-1.1: 连续写入约 20MiB（20 批 x 128 条 x 8KiB），确保单个 space 的 free-list 超过 1MiB 回收阈值。
+    // AC-1.1: 连续写入约 32MiB（32 批 x 128 条 x 8KiB），确保单个 space 的 free-list 超过 1MiB 回收阈值。
     std::vector<Key> writtenKeys;
     BatchShape shape { RECLAIM_WRITE_BATCHES, RECLAIM_KEYS_PER_BATCH, RECLAIM_VALUE_SIZE };
     ASSERT_TRUE(WriteBatches(store, "physical_reclaim_", shape, writtenKeys));
@@ -1445,14 +1485,16 @@ HWTEST_F(EnableShrinkTest, SetShrinkEnablePhysicalReclaim, TestSize.Level1)
     SleepMillis(SETTLE_INTERVAL_MS);
     ReclaimProbe probe = WaitReclaimDrop(storeId, peak.dbBlockBytes, RECLAIM_SETTLE_TIMEOUT_MS,
         RECLAIM_MIN_DROP_PERCENT);
+    SettleReclaimProbe(storeId, peak.dbBlockBytes, probe);
     RecordPhysicalReclaimProperties(peak, probe, checkpointBeforeDelete, checkpointAfterDelete);
+    PrintPhysicalReclaimEvidence(peak, probe, RECLAIM_MIN_DROP_PERCENT);
     CloseStore(storeId, store);
     if (!peak.valid || !probe.finalUsage.valid || peak.dbBlockBytes == 0) {
         GTEST_SKIP() << "evidence gap: the RD database directory of the store is not measurable on this image";
     }
     EXPECT_GE(probe.dropPercent, RECLAIM_MIN_DROP_PERCENT) << "physical usage only dropped " <<
-        probe.dropPercent << "% (peak=" << peak.dbBlockBytes << ", final=" <<
-        probe.finalUsage.dbBlockBytes << ")";
+        probe.dropPercent << "% (threshold=" << RECLAIM_MIN_DROP_PERCENT << "%, peak=" <<
+        peak.dbBlockBytes << ", final=" << probe.finalUsage.dbBlockBytes << ")";
 }
 
 HWTEST_F(EnableShrinkTest, EncryptStoreShrinkCompatibility, TestSize.Level1)
