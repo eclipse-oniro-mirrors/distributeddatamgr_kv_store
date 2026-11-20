@@ -437,6 +437,12 @@ enum AuthType : uint32_t {
     IDENTICAL_ACCOUNT
 };
 
+enum CheckpointThreshold : int32_t {
+    CHECKPOINT_THRESHOLD_MIN_KB = 16,
+    CHECKPOINT_THRESHOLD_MAX_KB = 524288,
+    CHECKPOINT_THRESHOLD_DEFAULT_KB = 204800,
+};
+
 /**
  * @brief Provide configuration information for database creation.
 */
@@ -593,6 +599,11 @@ struct Options {
      * Set Whether the caller is application.
     */
     bool isApplication = false;
+    /**
+     * Size threshold in KB for starting an automatic checkpoint. Range [16, 524288]. Default 204800.
+     * Larger values reduce checkpoint frequency but increase WAL file size and peak memory usage.
+    */
+    int32_t walStartCheckpointSize = CHECKPOINT_THRESHOLD_DEFAULT_KB;
 };
 
 /**

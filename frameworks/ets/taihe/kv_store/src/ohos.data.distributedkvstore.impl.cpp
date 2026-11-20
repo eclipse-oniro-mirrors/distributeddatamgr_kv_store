@@ -1776,6 +1776,9 @@ public:
             options.baseDir = taiheOptions.rootDir.value();
             options.isCustomDir = true;
         }
+        if (taiheOptions.walStartCheckpointSize.has_value()) {
+            options.walStartCheckpointSize = taiheOptions.walStartCheckpointSize.value();
+        }
         if (!ani_kvstoreutils::IsStoreTypeSupported(options)) {
             ThrowAniError(Status::INVALID_ARGUMENT,
                 "Parameter error:only support DEVICE_COLLABORATION or SINGLE_VERSION");

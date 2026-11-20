@@ -965,6 +965,21 @@ JSUtil::StatusMsg JSUtil::SetValue(
     return statusMsg;
 }
 
+static JSUtil::StatusMsg GetWalStartCheckpointSize(napi_env env, napi_value in, DistributedKv::Options& options)
+{
+    bool hasCheckpoint = false;
+    napi_has_named_property(env, in, "walStartCheckpointSize", &hasCheckpoint);
+    if (!hasCheckpoint) {
+        return napi_ok;
+    }
+    int32_t threshold = 0;
+    JSUtil::StatusMsg statusMsg =
+        JSUtil::GetNamedProperty(env, in, "walStartCheckpointSize", threshold, true);
+    ASSERT(statusMsg.status == napi_ok, "get walStartCheckpointSize param failed", statusMsg);
+    options.walStartCheckpointSize = threshold;
+    return napi_ok;
+}
+
 /* napi_value <-> DistributedKv::Options */
 JSUtil::StatusMsg JSUtil::GetValue(napi_env env, napi_value in, DistributedKv::Options& options)
 {
@@ -1011,6 +1026,9 @@ JSUtil::StatusMsg JSUtil::GetValue(napi_env env, napi_value in, DistributedKv::O
             options.isCustomDir = true;
         }
     }
+
+    statusMsg = GetWalStartCheckpointSize(env, in, options);
+    ASSERT(statusMsg.status == napi_ok, "get walStartCheckpointSize param failed", statusMsg);
     return napi_ok;
 }
 
