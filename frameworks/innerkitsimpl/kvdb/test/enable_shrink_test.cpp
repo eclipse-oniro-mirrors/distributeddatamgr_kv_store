@@ -104,12 +104,18 @@ constexpr int64_t CONCURRENT_P95_FLOOR_MICROS = 1000 * 1000;
 constexpr int64_t READER_YIELD_MS = 1;
 
 constexpr int32_t PERF_WARMUP_ROUNDS = 1;
-constexpr int32_t PERF_ROUNDS = 4;
+// Six measured rounds keep the ABBA order balanced (P,E,E,P,P,E) and give the
+// median enough samples to reject a single noisy round.
+constexpr int32_t PERF_ROUNDS = 6;
 constexpr int32_t PERF_ORDER_CYCLE = 4;
 constexpr int32_t PERF_DELETE_SAMPLES = 200;
-constexpr int32_t PERF_BATCH_SAMPLES = 200;
-constexpr int32_t PERF_BATCH_SIZE = 8;
+// A 32-key batch is a real "批量编辑" workload and raises the 10% budget from
+// ~100us to a few hundred microseconds, above scheduler/reclaim jitter.
+constexpr int32_t PERF_BATCH_SAMPLES = 500;
+constexpr int32_t PERF_BATCH_SIZE = 32;
 constexpr size_t PERF_VALUE_SIZE = 1024;
+constexpr int32_t PERF_DELETE_WARMUP_SAMPLES = 20;
+constexpr int32_t PERF_BATCH_WARMUP_SAMPLES = 20;
 
 // AC-1.7 strict tolerance: P95/throughput degradation must stay within 10% (no absolute jitter floor).
 constexpr int64_t PERF_DEGRADE_LIMIT_PERCENT = 10;
@@ -709,6 +715,11 @@ void RecordToggleDisabledProperties(const std::string &prefix, const TogglePhase
     testing::Test::RecordProperty(prefix + "drop_observed", BoolText(dropped));
 }
 
+struct ReclaimObservation {
+    bool observed = false;
+    int64_t dropPercent = 0;
+};
+
 struct PerfSamples {
     std::vector<int64_t> plainDeleteP95s;
     std::vector<int64_t> enabledDeleteP95s;
@@ -716,6 +727,8 @@ struct PerfSamples {
     std::vector<int64_t> enabledBatchP95s;
     std::vector<int64_t> plainWriteBytesPerSec;
     std::vector<int64_t> enabledWriteBytesPerSec;
+    std::vector<ReclaimObservation> plainReclaimObservations;
+    std::vector<ReclaimObservation> enabledReclaimObservations;
     DiskUsage enabledPeak;
     DiskUsage enabledFinal;
     bool checkpointsOk = true;
@@ -733,10 +746,12 @@ int64_t BytesPerSecond(int64_t bytes, int64_t micros)
 std::vector<Entry> MakePerfRoundEntries(int32_t round, std::vector<Entry> &batchEntries)
 {
     std::string prefix = "perf_" + std::to_string(round) + "_";
-    auto deleteEntries = MakeEntries(prefix + "delete_", PERF_DELETE_SAMPLES, PERF_VALUE_SIZE);
+    int32_t deleteCount = PERF_DELETE_WARMUP_SAMPLES + PERF_DELETE_SAMPLES;
+    auto deleteEntries = MakeEntries(prefix + "delete_", deleteCount, PERF_VALUE_SIZE);
+    int32_t batchCount = PERF_BATCH_WARMUP_SAMPLES + PERF_BATCH_SAMPLES;
     batchEntries.clear();
-    batchEntries.reserve(static_cast<size_t>(PERF_BATCH_SAMPLES) * static_cast<size_t>(PERF_BATCH_SIZE));
-    for (int32_t batch = 0; batch < PERF_BATCH_SAMPLES; ++batch) {
+    batchEntries.reserve(static_cast<size_t>(batchCount) * static_cast<size_t>(PERF_BATCH_SIZE));
+    for (int32_t batch = 0; batch < batchCount; ++batch) {
         auto entries = MakeEntries(prefix + "batch_" + std::to_string(batch) + "_",
             PERF_BATCH_SIZE, PERF_VALUE_SIZE);
         batchEntries.insert(batchEntries.end(), entries.begin(), entries.end());
@@ -749,6 +764,7 @@ struct PerfContext {
     std::shared_ptr<SingleKvStore> enabled;
     std::shared_ptr<SingleStoreImpl> plainImpl;
     std::shared_ptr<SingleStoreImpl> impl;
+    std::string plainId;
     std::string enabledId;
 };
 
@@ -800,12 +816,13 @@ std::vector<int64_t> MeasureDeleteLatency(const std::shared_ptr<SingleKvStore> &
 {
     std::vector<int64_t> samples;
     samples.reserve(PERF_DELETE_SAMPLES);
-    for (int32_t index = 0; index < PERF_DELETE_SAMPLES; ++index) {
+    int32_t totalSamples = static_cast<int32_t>(deleteEntries.size());
+    for (int32_t index = 0; index < totalSamples; ++index) {
         auto start = std::chrono::steady_clock::now();
         Status status = store->Delete(deleteEntries[index].key);
         int64_t micros = ElapsedMicros(start);
         EXPECT_EQ(status, SUCCESS);
-        if (status == SUCCESS) {
+        if (status == SUCCESS && index >= PERF_DELETE_WARMUP_SAMPLES) {
             samples.push_back(micros);
         }
     }
@@ -827,13 +844,14 @@ int64_t MeasureBatchP95(const std::shared_ptr<SingleKvStore> &store, const std::
 {
     std::vector<int64_t> samples;
     samples.reserve(PERF_BATCH_SAMPLES);
-    for (int32_t batch = 0; batch < PERF_BATCH_SAMPLES; ++batch) {
+    int32_t totalBatches = static_cast<int32_t>(batchEntries.size()) / PERF_BATCH_SIZE;
+    for (int32_t batch = 0; batch < totalBatches; ++batch) {
         auto batchKeys = MakeBatchKeys(batchEntries, batch);
         auto start = std::chrono::steady_clock::now();
         bool ok = DeleteBatchChunked(store, batchKeys);
         int64_t micros = ElapsedMicros(start);
         EXPECT_TRUE(ok);
-        if (ok) {
+        if (ok && batch >= PERF_BATCH_WARMUP_SAMPLES) {
             samples.push_back(micros);
         }
     }
@@ -942,31 +960,42 @@ void RunPerfRoundBlocks(const PerfContext &context, const std::vector<Entry> &de
     int64_t plainBatch = 0;
     int64_t enabledDelete = 0;
     int64_t enabledBatch = 0;
-    ReclaimMonitor monitor(context.enabledId);
+    // Both stores are monitored for the whole two-block window, so the monitor
+    // overhead is symmetric and no longer favors the plain baseline.
+    ReclaimMonitor plainMonitor(context.plainId);
+    ReclaimMonitor enabledMonitor(context.enabledId);
+    plainMonitor.Start();
+    enabledMonitor.Start();
     if (plainFirst) {
         RunPerfStoreBlock(context.plain, deleteEntries, batchEntries, plainDelete, plainBatch);
-        monitor.Start();
         RunPerfStoreBlock(context.enabled, deleteEntries, batchEntries, enabledDelete, enabledBatch);
-        monitor.Stop();
     } else {
-        monitor.Start();
         RunPerfStoreBlock(context.enabled, deleteEntries, batchEntries, enabledDelete, enabledBatch);
-        monitor.Stop();
         if (!WaitReclaimQuiescent(context.enabledId, PERF_QUIESCE_TIMEOUT_MS) && record) {
             perf.quiescenceOk = false;
         }
         RunPerfStoreBlock(context.plain, deleteEntries, batchEntries, plainDelete, plainBatch);
     }
+    plainMonitor.Stop();
+    enabledMonitor.Stop();
     if (!record) {
         return;
     }
+    ReclaimObservation plainObservation;
+    plainObservation.observed = plainMonitor.Observed();
+    plainObservation.dropPercent = plainMonitor.DropPercent();
+    ReclaimObservation enabledObservation;
+    enabledObservation.observed = enabledMonitor.Observed();
+    enabledObservation.dropPercent = enabledMonitor.DropPercent();
     perf.plainDeleteP95s.push_back(plainDelete);
     perf.enabledDeleteP95s.push_back(enabledDelete);
     perf.plainBatchP95s.push_back(plainBatch);
     perf.enabledBatchP95s.push_back(enabledBatch);
-    perf.reclaimObservedDuringMeasurement = perf.reclaimObservedDuringMeasurement || monitor.Observed();
+    perf.plainReclaimObservations.push_back(plainObservation);
+    perf.enabledReclaimObservations.push_back(enabledObservation);
+    perf.reclaimObservedDuringMeasurement = perf.reclaimObservedDuringMeasurement || enabledObservation.observed;
     perf.reclaimDropDuringMeasurementPercent =
-        std::max(perf.reclaimDropDuringMeasurementPercent, monitor.DropPercent());
+        std::max(perf.reclaimDropDuringMeasurementPercent, enabledObservation.dropPercent);
 }
 
 void RunPerfRoundSettle(const PerfContext &context, PerfSamples &perf, bool record)
@@ -1127,102 +1156,107 @@ void ExpectPerfResults(const PerfMedians &medians, const DiskUsage &peak, const 
         medians.plainWrite << " -> " << medians.enabledWrite << " bytes/sec)";
 }
 
-void RecordPerfTimingProperties(int64_t acceptUs, int64_t disableUs, const PerfSamples &perf)
+double PerfDeltaPercent(int64_t plainValue, int64_t enabledValue)
 {
-    testing::Test::RecordProperty("switch_accept_us", acceptUs);
-    testing::Test::RecordProperty("switch_disable_us", disableUs);
-    testing::Test::RecordProperty("perf_rounds", static_cast<int64_t>(PERF_ROUNDS));
-    testing::Test::RecordProperty("perf_warmup_rounds", static_cast<int64_t>(PERF_WARMUP_ROUNDS));
-    testing::Test::RecordProperty("perf_tolerance", std::string("strict_10_percent_no_abs_jitter"));
-    testing::Test::RecordProperty("perf_checkpoint_ok", BoolText(perf.checkpointsOk));
+    return plainValue > 0 ? static_cast<double>(enabledValue - plainValue) * PERCENT_SCALE /
+        static_cast<double>(plainValue) : 0.0;
 }
 
-void RecordPerfMeasurementProperties(const PerfMedians &medians, const DiskUsage &peak,
-    const DiskUsage &finalUsage)
+void PrintPerfConfig()
 {
-    testing::Test::RecordProperty("delete_p95_plain_us", medians.plainDeleteP95);
-    testing::Test::RecordProperty("delete_p95_enabled_us", medians.enabledDeleteP95);
-    testing::Test::RecordProperty("delete_p95_diff_us", medians.enabledDeleteP95 - medians.plainDeleteP95);
-    testing::Test::RecordProperty("delete_p95_allowed_us", medians.deleteAllowed);
-    testing::Test::RecordProperty("delete_p95_degrade_percent", medians.deleteDegradePercent);
-    testing::Test::RecordProperty("batch_p95_plain_us", medians.plainBatchP95);
-    testing::Test::RecordProperty("batch_p95_enabled_us", medians.enabledBatchP95);
-    testing::Test::RecordProperty("batch_p95_diff_us", medians.enabledBatchP95 - medians.plainBatchP95);
-    testing::Test::RecordProperty("batch_p95_allowed_us", medians.batchAllowed);
-    testing::Test::RecordProperty("batch_p95_degrade_percent", medians.batchDegradePercent);
-    testing::Test::RecordProperty("write_plain_bytes_per_sec", medians.plainWrite);
-    testing::Test::RecordProperty("write_enabled_bytes_per_sec", medians.enabledWrite);
-    testing::Test::RecordProperty("write_degrade_percent", medians.writeDegradePercent);
-    testing::Test::RecordProperty("enabled_reclaim_peak_bytes", static_cast<int64_t>(peak.dbBlockBytes));
-    testing::Test::RecordProperty("enabled_reclaim_final_bytes",
-        static_cast<int64_t>(finalUsage.dbBlockBytes));
-    testing::Test::RecordProperty("enabled_reclaim_peak_other_bytes",
-        static_cast<int64_t>(peak.otherBlockBytes));
-    testing::Test::RecordProperty("enabled_reclaim_final_other_bytes",
-        static_cast<int64_t>(finalUsage.otherBlockBytes));
-    testing::Test::RecordProperty("enabled_reclaim_peak_all_bytes", static_cast<int64_t>(peak.blockBytes));
-    testing::Test::RecordProperty("enabled_reclaim_final_all_bytes",
-        static_cast<int64_t>(finalUsage.blockBytes));
-    testing::Test::RecordProperty("enabled_reclaim_drop_percent", medians.reclaimDropPercent);
+    std::cout << "[AC-1.7][perf][config] rounds=" << PERF_ROUNDS << " warmup_rounds=" <<
+        PERF_WARMUP_ROUNDS << " delete_samples=" << PERF_DELETE_SAMPLES << " batch_samples=" <<
+        PERF_BATCH_SAMPLES << " batch_size=" << PERF_BATCH_SIZE << " value_size=" <<
+        PERF_VALUE_SIZE << " delete_warmup=" << PERF_DELETE_WARMUP_SAMPLES <<
+        " batch_warmup=" << PERF_BATCH_WARMUP_SAMPLES << " order_cycle=" << PERF_ORDER_CYCLE <<
+        " limit=" << PERF_DEGRADE_LIMIT_PERCENT << "%" << std::endl;
 }
 
-void RecordPerfRoundProperties(const PerfSamples &perf)
+void PrintPerfRoundEvidence(const PerfSamples &perf)
 {
     size_t rounds = std::min(std::min(perf.plainDeleteP95s.size(), perf.enabledDeleteP95s.size()),
-        std::min(perf.plainBatchP95s.size(), perf.enabledBatchP95s.size()));
+        std::min(std::min(perf.plainBatchP95s.size(), perf.enabledBatchP95s.size()),
+        std::min(perf.plainWriteBytesPerSec.size(), perf.enabledWriteBytesPerSec.size())));
     for (size_t index = 0; index < rounds; ++index) {
-        std::string suffix = "_r" + std::to_string(index + 1);
         int64_t plainDelete = perf.plainDeleteP95s[index];
         int64_t enabledDelete = perf.enabledDeleteP95s[index];
         int64_t plainBatch = perf.plainBatchP95s[index];
         int64_t enabledBatch = perf.enabledBatchP95s[index];
-        testing::Test::RecordProperty("delete_p95_plain_us" + suffix, plainDelete);
-        testing::Test::RecordProperty("delete_p95_enabled_us" + suffix, enabledDelete);
-        double deleteDelta = plainDelete > 0 ?
-            static_cast<double>(enabledDelete - plainDelete) * PERCENT_SCALE /
-            static_cast<double>(plainDelete) : 0.0;
-        testing::Test::RecordProperty("delete_p95_delta_percent" + suffix, deleteDelta);
-        testing::Test::RecordProperty("batch_p95_plain_us" + suffix, plainBatch);
-        testing::Test::RecordProperty("batch_p95_enabled_us" + suffix, enabledBatch);
-        double batchDelta = plainBatch > 0 ?
-            static_cast<double>(enabledBatch - plainBatch) * PERCENT_SCALE /
-            static_cast<double>(plainBatch) : 0.0;
-        testing::Test::RecordProperty("batch_p95_delta_percent" + suffix, batchDelta);
+        int64_t plainWrite = perf.plainWriteBytesPerSec[index];
+        int64_t enabledWrite = perf.enabledWriteBytesPerSec[index];
+        std::cout << "[AC-1.7][perf][round " << index + 1 << "] delete_us plain=" << plainDelete <<
+            " enabled=" << enabledDelete << " delta=" << std::fixed <<
+            std::setprecision(PERCENT_DECIMALS) << PerfDeltaPercent(plainDelete, enabledDelete) <<
+            "% batch_us plain=" << plainBatch << " enabled=" << enabledBatch << " delta=" <<
+            PerfDeltaPercent(plainBatch, enabledBatch) << "% write_bps plain=" << plainWrite <<
+            " enabled=" << enabledWrite << " delta=" <<
+            PerfDeltaPercent(plainWrite, enabledWrite) << "%" << std::defaultfloat << std::endl;
+        bool plainObserved = false;
+        int64_t plainDrop = 0;
+        bool enabledObserved = false;
+        int64_t enabledDrop = 0;
+        if (index < perf.plainReclaimObservations.size()) {
+            plainObserved = perf.plainReclaimObservations[index].observed;
+            plainDrop = perf.plainReclaimObservations[index].dropPercent;
+        }
+        if (index < perf.enabledReclaimObservations.size()) {
+            enabledObserved = perf.enabledReclaimObservations[index].observed;
+            enabledDrop = perf.enabledReclaimObservations[index].dropPercent;
+        }
+        std::cout << "[AC-1.7][perf][round " << index + 1 << "] reclaim plain_observed=" <<
+            BoolText(plainObserved) << " plain_drop=" << plainDrop << "% enabled_observed=" <<
+            BoolText(enabledObserved) << " enabled_drop=" << enabledDrop << "%" << std::endl;
     }
-    testing::Test::RecordProperty("perf_quiescence_ok", BoolText(perf.quiescenceOk));
-    testing::Test::RecordProperty("reclaim_during_measurement",
-        BoolText(perf.reclaimObservedDuringMeasurement));
-    testing::Test::RecordProperty("reclaim_during_measurement_drop_percent",
-        perf.reclaimDropDuringMeasurementPercent);
 }
 
-void PrintPerfEvidence(const PerfMedians &medians)
+void PrintPerfMedianSummary(const PerfMedians &medians)
 {
-    double deleteDegrade = medians.plainDeleteP95 > 0 ?
-        static_cast<double>(medians.enabledDeleteP95 - medians.plainDeleteP95) * PERCENT_SCALE /
-        static_cast<double>(medians.plainDeleteP95) : 0.0;
-    double batchDegrade = medians.plainBatchP95 > 0 ?
-        static_cast<double>(medians.enabledBatchP95 - medians.plainBatchP95) * PERCENT_SCALE /
-        static_cast<double>(medians.plainBatchP95) : 0.0;
-    double writeDegrade = medians.plainWrite > 0 ?
+    double writeDelta = medians.plainWrite > 0 ?
         static_cast<double>(medians.plainWrite - medians.enabledWrite) * PERCENT_SCALE /
         static_cast<double>(medians.plainWrite) : 0.0;
-    std::cout << "[AC-1.7][perf] rounds=" << PERF_ROUNDS << " warmup=" << PERF_WARMUP_ROUNDS <<
-        " delete_samples=" << PERF_DELETE_SAMPLES << " batch_samples=" << PERF_BATCH_SAMPLES <<
-        std::endl;
-    std::cout << "[AC-1.7][perf] delete_p95_us plain=" << medians.plainDeleteP95 << " enabled=" <<
-        medians.enabledDeleteP95 << " degrade=" << std::fixed <<
-        std::setprecision(PERCENT_DECIMALS) << deleteDegrade << "% limit=" <<
-        PERF_DEGRADE_LIMIT_PERCENT << "%" << std::endl;
-    std::cout << "[AC-1.7][perf] delete_batch_p95_us plain=" << medians.plainBatchP95 <<
-        " enabled=" << medians.enabledBatchP95 << " degrade=" << batchDegrade << "% limit=" <<
-        PERF_DEGRADE_LIMIT_PERCENT << "%" << std::endl;
-    std::cout << "[AC-1.7][perf] write_throughput_bps plain=" << medians.plainWrite << " (" <<
-        static_cast<double>(medians.plainWrite) / BYTES_PER_MIB << " MiB/s) enabled=" <<
-        medians.enabledWrite << " (" <<
-        static_cast<double>(medians.enabledWrite) / BYTES_PER_MIB << " MiB/s) degrade=" <<
-        writeDegrade << "% limit=" << PERF_DEGRADE_LIMIT_PERCENT << "%" <<
+    std::cout << "[AC-1.7][perf] median delete_p95_us plain=" << medians.plainDeleteP95 <<
+        " enabled=" << medians.enabledDeleteP95 << " diff=" <<
+        medians.enabledDeleteP95 - medians.plainDeleteP95 << " allowed=" << medians.deleteAllowed <<
+        " degrade=" << std::fixed << std::setprecision(PERCENT_DECIMALS) <<
+        PerfDeltaPercent(medians.plainDeleteP95, medians.enabledDeleteP95) << "%" <<
         std::defaultfloat << std::endl;
+    std::cout << "[AC-1.7][perf] median delete_batch_p95_us plain=" << medians.plainBatchP95 <<
+        " enabled=" << medians.enabledBatchP95 << " diff=" <<
+        medians.enabledBatchP95 - medians.plainBatchP95 << " allowed=" << medians.batchAllowed <<
+        " degrade=" << std::fixed << std::setprecision(PERCENT_DECIMALS) <<
+        PerfDeltaPercent(medians.plainBatchP95, medians.enabledBatchP95) << "%" <<
+        std::defaultfloat << std::endl;
+    std::cout << "[AC-1.7][perf] median write_throughput_bps plain=" << medians.plainWrite <<
+        " enabled=" << medians.enabledWrite << " plain_mib=" <<
+        static_cast<double>(medians.plainWrite) / BYTES_PER_MIB << " enabled_mib=" <<
+        static_cast<double>(medians.enabledWrite) / BYTES_PER_MIB << " degrade=" << std::fixed <<
+        std::setprecision(PERCENT_DECIMALS) << writeDelta << "%" << std::defaultfloat << std::endl;
+}
+
+void PrintPerfReclaimSummary(const PerfScenarioResult &result)
+{
+    const PerfSamples &perf = result.samples;
+    std::cout << "[AC-1.7][perf] reclaim peak_db_bytes=" << perf.enabledPeak.dbBlockBytes <<
+        " final_db_bytes=" << result.enabledFinal.dbBlockBytes << " drop=" <<
+        result.medians.reclaimDropPercent << "% peak_other=" << perf.enabledPeak.otherBlockBytes <<
+        " final_other=" << result.enabledFinal.otherBlockBytes << " peak_all=" <<
+        perf.enabledPeak.blockBytes << " final_all=" << result.enabledFinal.blockBytes << std::endl;
+    std::cout << "[AC-1.7][perf] evidence during_measurement=" <<
+        BoolText(perf.reclaimObservedDuringMeasurement) << " during_drop=" <<
+        perf.reclaimDropDuringMeasurementPercent << "% quiescence=" << BoolText(perf.quiescenceOk) <<
+        " checkpoint=" << BoolText(perf.checkpointsOk) << " put_ok=" << BoolText(perf.putOk) <<
+        std::endl;
+    std::cout << "[AC-1.7][perf] switch accept_us=" << result.acceptUs << " disable_us=" <<
+        result.disableUs << " disable_status=" << static_cast<int32_t>(result.disableStatus) <<
+        " engine_shrink_enabled=" << BoolText(result.engineShrinkEnabled) << std::endl;
+}
+
+void PrintPerfEvidence(const PerfScenarioResult &result)
+{
+    PrintPerfConfig();
+    PrintPerfRoundEvidence(result.samples);
+    PrintPerfMedianSummary(result.medians);
+    PrintPerfReclaimSummary(result);
 }
 
 struct ConcurrentSummary {
@@ -2092,14 +2126,10 @@ HWTEST_F(EnableShrinkTest, DeleteP95WithShrinkEnabled, TestSize.Level1)
         GTEST_SKIP() << probeReason;
     }
 
-    PerfContext context { plain, enabled, plainImpl, impl, enabledId };
+    PerfContext context { plain, enabled, plainImpl, impl, plainId, enabledId };
     PerfScenarioResult result;
     ASSERT_TRUE(RunPerfScenario(context, result)) << "shrink perf scenario failed";
-    RecordPerfTimingProperties(result.acceptUs, result.disableUs, result.samples);
-    testing::Test::RecordProperty("engine_shrink_enabled_after_set", BoolText(result.engineShrinkEnabled));
-    RecordPerfMeasurementProperties(result.medians, result.samples.enabledPeak, result.enabledFinal);
-    RecordPerfRoundProperties(result.samples);
-    PrintPerfEvidence(result.medians);
+    PrintPerfEvidence(result);
     EXPECT_EQ(result.disableStatus, SUCCESS);
     EXPECT_LE(result.acceptUs, MAX_ACCEPT_MILLIS * MICROS_PER_MILLI);
     EXPECT_LE(result.disableUs, MAX_ACCEPT_MILLIS * MICROS_PER_MILLI);
