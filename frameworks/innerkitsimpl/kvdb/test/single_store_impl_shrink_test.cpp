@@ -164,7 +164,8 @@ void SingleStoreImplShrinkTest::CloseStore(const std::string &storeId,
 std::shared_ptr<SingleStoreImpl> SingleStoreImplShrinkTest::AsImpl(
     const std::shared_ptr<SingleKvStore> &store)
 {
-    return std::static_pointer_cast<SingleStoreImpl>(store);
+    // White-box access is only valid for the in-process store; reject other implementations.
+    return std::dynamic_pointer_cast<SingleStoreImpl>(store);
 }
 
 HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableSQLiteNotSupported, TestSize.Level1)
@@ -252,5 +253,28 @@ HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableDisableBeforeTaskStarts, Test
     EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
     EXPECT_TRUE(WaitShrinkSettled(*impl, false));
     CloseStore("ToggleShrinkStore", store);
+}
+
+HWTEST_F(SingleStoreImplShrinkTest, ShrinkManagerRollbackRestoresState, TestSize.Level1)
+{
+    ShrinkManager manager;
+    bool desired = true;
+    uint32_t pending = 1;
+    EXPECT_TRUE(manager.SetDesired(true));
+    manager.GetState(desired, pending);
+    EXPECT_TRUE(desired);
+    EXPECT_EQ(pending, 1u);
+    manager.Rollback(false);
+    manager.GetState(desired, pending);
+    EXPECT_FALSE(desired);
+    EXPECT_EQ(pending, 0u);
+
+    EXPECT_TRUE(manager.SetDesired(true));
+    manager.Finish();
+    EXPECT_TRUE(manager.SetDesired(true));
+    manager.Rollback(true);
+    manager.GetState(desired, pending);
+    EXPECT_TRUE(desired);
+    EXPECT_EQ(pending, 0u);
 }
 }

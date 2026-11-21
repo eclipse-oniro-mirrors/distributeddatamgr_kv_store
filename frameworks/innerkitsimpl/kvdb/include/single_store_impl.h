@@ -177,6 +177,8 @@ private:
     // the actual engine capability is intentionally not probed on the open path.
     bool shrinkAccepted_ = false;
     ShrinkManager shrinkManager_;
+    // Serializes shrink submissions so a failed enqueue can restore the exact previous desired state.
+    std::mutex shrinkSubmitMutex_;
     std::shared_ptr<SyncObserver> syncObserver_ = nullptr;
     ConcurrentMap<uintptr_t, std::pair<uint32_t, std::shared_ptr<ObserverBridge>>> observers_;
     ConcurrentMap<uint64_t, AsyncFunc> asyncFuncs_;

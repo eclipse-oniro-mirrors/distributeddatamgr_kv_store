@@ -21,11 +21,14 @@
 
 namespace OHOS::DistributedKv {
 // SetDesired returns true when the caller must enqueue exactly one task; that task must call Finish once.
+// When the enqueue fails, the caller must call Rollback with the desired state captured before SetDesired.
 class ShrinkManager {
 public:
     bool SetDesired(bool enable);
     bool TryBegin(bool enable);
     void Finish();
+    // Undo one accepted SetDesired reservation when the task cannot be enqueued.
+    void Rollback(bool previousDesired);
     void GetState(bool &desiredEnabled, uint32_t &pendingTasks) const;
 
 private:

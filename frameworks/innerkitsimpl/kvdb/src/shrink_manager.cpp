@@ -43,6 +43,15 @@ void ShrinkManager::Finish()
     --pendingTasks_;
 }
 
+void ShrinkManager::Rollback(bool previousDesired)
+{
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    if (pendingTasks_ > 0) {
+        --pendingTasks_;
+    }
+    desiredEnabled_ = previousDesired;
+}
+
 void ShrinkManager::GetState(bool &desiredEnabled, uint32_t &pendingTasks) const
 {
     std::lock_guard<std::mutex> lock(stateMutex_);

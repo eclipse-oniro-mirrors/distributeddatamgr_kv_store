@@ -933,9 +933,19 @@ Status SingleStoreImpl::SetShrinkEnable(bool enable)
             StoreUtil::Anonymous(storeId_).c_str());
         return NOT_SUPPORT;
     }
+    std::lock_guard<std::mutex> submitLock(shrinkSubmitMutex_);
+    bool previousDesired = false;
+    uint32_t previousPending = 0;
+    shrinkManager_.GetState(previousDesired, previousPending);
     if (shrinkManager_.SetDesired(enable)) {
         auto self = shared_from_this();
-        (void)GetShrinkExecutorPool().Execute([self, enable]() { self->RunShrink(enable); });
+        auto taskId = GetShrinkExecutorPool().Execute([self, enable]() { self->RunShrink(enable); });
+        if (taskId == ExecutorPool::INVALID_TASK_ID) {
+            shrinkManager_.Rollback(previousDesired);
+            ZLOGE("submit shrink task failed, enable:%{public}d store:%{public}s", enable,
+                StoreUtil::Anonymous(storeId_).c_str());
+            return DB_ERROR;
+        }
     }
     ZLOGI("shrink switch accepted, enable:%{public}d store:%{public}s", enable,
         StoreUtil::Anonymous(storeId_).c_str());

@@ -1708,7 +1708,8 @@ void EnableShrinkTest::CloseStore(const std::string &storeId, std::shared_ptr<Si
 
 std::shared_ptr<SingleStoreImpl> EnableShrinkTest::AsImpl(const std::shared_ptr<SingleKvStore> &store)
 {
-    return std::static_pointer_cast<SingleStoreImpl>(store);
+    // White-box access is only valid for the in-process store; reject other implementations.
+    return std::dynamic_pointer_cast<SingleStoreImpl>(store);
 }
 
 HWTEST_F(EnableShrinkTest, SetShrinkEnablePhysicalReclaim, TestSize.Level1)

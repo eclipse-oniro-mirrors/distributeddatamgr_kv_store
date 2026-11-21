@@ -401,7 +401,8 @@ public:
      * fallback. The actual engine is not probed on the open path; an unsupported engine is
      * handled by the background call (warning for NOT_SUPPORT/BUSY/TIMEOUT; log/DFX for DB_ERROR).
      * @param enable True to request enable, false to request disable.
-     * @return SUCCESS if accepted, ALREADY_CLOSED if closed, NOT_SUPPORT if enable is unsupported.
+     * @return SUCCESS if accepted, ALREADY_CLOSED if closed, NOT_SUPPORT if enable is unsupported,
+     * DB_ERROR if the background task could not be scheduled (the request is not retained).
      */
     virtual Status SetShrinkEnable(bool enable)
     {
