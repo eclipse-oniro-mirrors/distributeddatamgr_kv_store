@@ -104,9 +104,11 @@ constexpr int64_t CONCURRENT_P95_FLOOR_MICROS = 1000 * 1000;
 constexpr int64_t READER_YIELD_MS = 1;
 
 constexpr int32_t PERF_WARMUP_ROUNDS = 1;
-// Ten measured rounds keep the ABBA order balanced (P,E,E,P,P,E,E,P,P,E) and
-// give the median enough samples to tolerate up to four noisy rounds.
-constexpr int32_t PERF_ROUNDS = 10;
+// Six measured rounds keep the ABBA order balanced (P,E,E,P,P,E) and let the
+// median tolerate two disturbed rounds; each round already aggregates many
+// interleaved PutBatch chunks. Longer runs crossed into a device throttling
+// phase in real tests, comparing different thermal states instead of shrink.
+constexpr int32_t PERF_ROUNDS = 6;
 constexpr int32_t PERF_ORDER_CYCLE = 4;
 constexpr int32_t PERF_DELETE_SAMPLES = 200;
 // A 32-key batch is a real "批量编辑" workload and raises the 10% budget from
@@ -789,34 +791,45 @@ struct PerfContext {
     std::string enabledId;
 };
 
-bool MeasureWrite(const std::shared_ptr<SingleKvStore> &store, const std::vector<Entry> &entries,
-    int64_t &micros)
+bool MeasureWriteChunkPair(const PerfContext &context, const std::vector<Entry> &chunk,
+    bool plainFirst, int64_t &plainMicros, int64_t &enabledMicros)
 {
-    auto start = std::chrono::steady_clock::now();
-    bool ok = PutBatchChunked(store, entries);
-    micros = ElapsedMicros(start);
-    return ok;
+    auto &firstStore = plainFirst ? context.plain : context.enabled;
+    auto &secondStore = plainFirst ? context.enabled : context.plain;
+    auto &firstMicros = plainFirst ? plainMicros : enabledMicros;
+    auto &secondMicros = plainFirst ? enabledMicros : plainMicros;
+    auto firstStart = std::chrono::steady_clock::now();
+    bool firstOk = firstStore->PutBatch(chunk) == SUCCESS;
+    firstMicros += ElapsedMicros(firstStart);
+    auto secondStart = std::chrono::steady_clock::now();
+    bool secondOk = secondStore->PutBatch(chunk) == SUCCESS;
+    secondMicros += ElapsedMicros(secondStart);
+    return firstOk && secondOk;
 }
 
 bool RunPerfWritePhase(const PerfContext &context, const std::vector<Entry> &allEntries,
     PerfSamples &perf, bool plainFirst, bool record)
 {
     int64_t allBytes = static_cast<int64_t>(allEntries.size()) * static_cast<int64_t>(PERF_VALUE_SIZE);
-    auto firstStore = plainFirst ? context.plain : context.enabled;
-    auto secondStore = plainFirst ? context.enabled : context.plain;
-    int64_t firstUs = 0;
-    int64_t secondUs = 0;
-    bool firstOk = MeasureWrite(firstStore, allEntries, firstUs);
-    bool secondOk = MeasureWrite(secondStore, allEntries, secondUs);
-    perf.putOk = firstOk && secondOk;
-    if (!perf.putOk) {
-        return false;
+    int64_t plainMicros = 0;
+    int64_t enabledMicros = 0;
+    // Small interleaved chunks keep both stores in the same cache/frequency state; the
+    // first store of each chunk alternates, so neither side owns the warm-up position.
+    bool plainFirstChunk = plainFirst;
+    for (size_t offset = 0; offset < allEntries.size();
+        offset += static_cast<size_t>(MAX_BATCH_ENTRIES)) {
+        size_t count = std::min(static_cast<size_t>(MAX_BATCH_ENTRIES), allEntries.size() - offset);
+        std::vector<Entry> chunk(allEntries.begin() + offset, allEntries.begin() + offset + count);
+        if (!MeasureWriteChunkPair(context, chunk, plainFirstChunk, plainMicros, enabledMicros)) {
+            perf.putOk = false;
+            return false;
+        }
+        plainFirstChunk = !plainFirstChunk;
     }
+    perf.putOk = true;
     if (record) {
-        int64_t plainUs = plainFirst ? firstUs : secondUs;
-        int64_t enabledUs = plainFirst ? secondUs : firstUs;
-        perf.plainWriteBytesPerSec.push_back(BytesPerSecond(allBytes, plainUs));
-        perf.enabledWriteBytesPerSec.push_back(BytesPerSecond(allBytes, enabledUs));
+        perf.plainWriteBytesPerSec.push_back(BytesPerSecond(allBytes, plainMicros));
+        perf.enabledWriteBytesPerSec.push_back(BytesPerSecond(allBytes, enabledMicros));
     }
     SleepMillis(SETTLE_INTERVAL_MS);
     perf.checkpointsOk = CheckpointStore(context.plainImpl) && perf.checkpointsOk;
@@ -1214,7 +1227,7 @@ void PrintPerfConfig()
         PERF_BATCH_SAMPLES << " batch_size=" << PERF_BATCH_SIZE << " value_size=" <<
         PERF_VALUE_SIZE << " delete_warmup=" << PERF_DELETE_WARMUP_SAMPLES <<
         " batch_warmup=" << PERF_BATCH_WARMUP_SAMPLES << " order_cycle=" << PERF_ORDER_CYCLE <<
-        " limit=" << PERF_DEGRADE_LIMIT_PERCENT << "%" << std::endl;
+        " write_mode=interleaved limit=" << PERF_DEGRADE_LIMIT_PERCENT << "%" << std::endl;
 }
 
 void PrintPerfRoundEvidence(const PerfSamples &perf)
