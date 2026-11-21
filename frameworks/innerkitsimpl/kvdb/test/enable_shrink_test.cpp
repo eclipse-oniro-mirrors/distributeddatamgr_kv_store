@@ -1677,39 +1677,6 @@ void VerifySurvivingEntries(const std::shared_ptr<SingleKvStore> &store, const R
     EXPECT_EQ(reclaimLeft, 0);
 }
 
-void RecordConcurrentProperties(const ConcurrentSummary &summary, const ConcurrentReclaimRun &run,
-    const DiskUsage &beforeDelete, bool checkpointOk, bool engineEnabled)
-{
-    testing::Test::RecordProperty("concurrent_readers", static_cast<int64_t>(CONCURRENT_READERS));
-    testing::Test::RecordProperty("concurrent_survive_bytes",
-        static_cast<int64_t>(CONCURRENT_SURVIVE_KEYS) * static_cast<int64_t>(CONCURRENT_SURVIVE_VALUE_SIZE));
-    testing::Test::RecordProperty("concurrent_reclaim_dataset_bytes",
-        static_cast<int64_t>(CONCURRENT_RECLAIM_KEYS) * static_cast<int64_t>(CONCURRENT_RECLAIM_VALUE_SIZE));
-    testing::Test::RecordProperty("concurrent_deleted_keys", static_cast<int64_t>(run.deletedKeys));
-    testing::Test::RecordProperty("concurrent_delete_micros", run.deleteMicros);
-    testing::Test::RecordProperty("concurrent_reclaim_micros", run.reclaimMicros);
-    testing::Test::RecordProperty("concurrent_baseline_samples",
-        static_cast<int64_t>(summary.baselineSamples.size()));
-    testing::Test::RecordProperty("concurrent_reclaim_samples",
-        static_cast<int64_t>(summary.reclaimSamples.size()));
-    testing::Test::RecordProperty("concurrent_baseline_p95_us", summary.baselineP95);
-    testing::Test::RecordProperty("concurrent_reclaim_p95_us", summary.reclaimP95);
-    testing::Test::RecordProperty("concurrent_reclaim_max_us", summary.reclaimMax);
-    testing::Test::RecordProperty("concurrent_allowed_p95_us", summary.allowedP95);
-    testing::Test::RecordProperty("concurrent_read_failures", static_cast<int64_t>(summary.readFailuresTotal));
-    testing::Test::RecordProperty("concurrent_write_failures", static_cast<int64_t>(run.writeFailures));
-    testing::Test::RecordProperty("concurrent_peak_blocks_bytes",
-        static_cast<int64_t>(beforeDelete.dbBlockBytes));
-    testing::Test::RecordProperty("concurrent_final_blocks_bytes",
-        static_cast<int64_t>(run.finalUsage.dbBlockBytes));
-    testing::Test::RecordProperty("concurrent_physical_drop_percent", run.dropPercent);
-    testing::Test::RecordProperty("concurrent_physical_drop_observed", BoolText(run.reclaimObserved));
-    testing::Test::RecordProperty("concurrent_reclaim_observed", BoolText(run.reclaimObserved));
-    testing::Test::RecordProperty("concurrent_reclaim_during_reads", BoolText(run.reclaimDuringReads));
-    testing::Test::RecordProperty("concurrent_engine_shrink_enabled", BoolText(engineEnabled));
-    testing::Test::RecordProperty("concurrent_checkpoint_ok", BoolText(checkpointOk));
-}
-
 void ExpectConcurrentResults(const ConcurrentSummary &summary, const ConcurrentReclaimRun &run,
     const DiskUsage &beforeDelete)
 {
@@ -1933,7 +1900,6 @@ HWTEST_F(EnableShrinkTest, NoDeleteNoReclaim, TestSize.Level1)
 
     auto entries = MakeEntries("nodelete_", PLAIN_KEYS, PLAIN_VALUE_SIZE);
     ASSERT_TRUE(PutBatchChunked(store, entries));
-    bool checkpointBeforeObserve = CheckpointStore(impl);
     SleepMillis(SETTLE_INTERVAL_MS);
     DiskUsage baseline;
     bool measured = QueryStoreDiskUsage(storeId, baseline);
@@ -1941,19 +1907,7 @@ HWTEST_F(EnableShrinkTest, NoDeleteNoReclaim, TestSize.Level1)
     auto endState = ReadShrinkState(*impl);
     EXPECT_TRUE(endState.desiredEnabled);
     EXPECT_EQ(endState.pendingTasks, 0u);
-    bool checkpointAfterObserve = CheckpointStore(impl);
     SleepMillis(SETTLE_INTERVAL_MS);
-    DiskUsage finalUsage;
-    (void)QueryStoreDiskUsage(storeId, finalUsage);
-    RecordProperty("nodelete_baseline_blocks_bytes", static_cast<int64_t>(baseline.dbBlockBytes));
-    RecordProperty("nodelete_minimum_blocks_bytes", static_cast<int64_t>(minimumBytes));
-    RecordProperty("nodelete_final_blocks_bytes", static_cast<int64_t>(finalUsage.dbBlockBytes));
-    RecordProperty("nodelete_baseline_other_bytes", static_cast<int64_t>(baseline.otherBlockBytes));
-    RecordProperty("nodelete_final_other_bytes", static_cast<int64_t>(finalUsage.otherBlockBytes));
-    RecordProperty("nodelete_checkpoint_ok",
-        std::string((checkpointBeforeObserve && checkpointAfterObserve) ? "true" : "false"));
-    RecordProperty("nodelete_evidence_gap", std::string("the engine reclamation threshold is internal and "
-        "not controllable; normal file housekeeping is tolerated below the shrink scale"));
     CloseStore(storeId, store);
     if (!measured || baseline.dbBlockBytes == 0) {
         GTEST_SKIP() << "evidence gap: the RD database directory of the store is not measurable on this image";
@@ -1979,28 +1933,12 @@ HWTEST_F(EnableShrinkTest, BelowThresholdNoReclaim, TestSize.Level1)
 
     auto entries = MakeEntries("below_threshold_", PLAIN_KEYS, PLAIN_VALUE_SIZE);
     ASSERT_TRUE(PutBatchChunked(store, entries));
-    bool checkpointBeforeObserve = CheckpointStore(impl);
     SleepMillis(SETTLE_INTERVAL_MS);
     DiskUsage baseline;
     bool measured = QueryStoreDiskUsage(storeId, baseline);
     ASSERT_TRUE(DeleteBatchChunked(store, MakeKeysRange(entries, BELOW_THRESHOLD_DELETE_KEYS)));
     uint64_t minimumBytes = ObserveMinimumDbBytes(storeId, baseline.dbBlockBytes, NO_DELETE_OBSERVE_MS);
-    bool checkpointAfterObserve = CheckpointStore(impl);
     SleepMillis(SETTLE_INTERVAL_MS);
-    DiskUsage finalUsage;
-    (void)QueryStoreDiskUsage(storeId, finalUsage);
-    RecordProperty("below_threshold_deleted_keys", static_cast<int64_t>(BELOW_THRESHOLD_DELETE_KEYS));
-    RecordProperty("below_threshold_deleted_bytes",
-        static_cast<int64_t>(BELOW_THRESHOLD_DELETE_KEYS) * static_cast<int64_t>(PLAIN_VALUE_SIZE));
-    RecordProperty("below_threshold_baseline_blocks_bytes", static_cast<int64_t>(baseline.dbBlockBytes));
-    RecordProperty("below_threshold_minimum_blocks_bytes", static_cast<int64_t>(minimumBytes));
-    RecordProperty("below_threshold_final_blocks_bytes", static_cast<int64_t>(finalUsage.dbBlockBytes));
-    RecordProperty("below_threshold_baseline_other_bytes", static_cast<int64_t>(baseline.otherBlockBytes));
-    RecordProperty("below_threshold_final_other_bytes", static_cast<int64_t>(finalUsage.otherBlockBytes));
-    RecordProperty("below_threshold_checkpoint_ok",
-        std::string((checkpointBeforeObserve && checkpointAfterObserve) ? "true" : "false"));
-    RecordProperty("below_threshold_construction_note", std::string("the per-space free-list is internal; "
-        "deleted bytes (640 KiB) are below the 1 MiB threshold"));
     CloseStore(storeId, store);
     if (!measured || baseline.dbBlockBytes == 0) {
         GTEST_SKIP() << "environment limitation: the RD database directory of the store is not measurable "
@@ -2035,7 +1973,6 @@ HWTEST_F(EnableShrinkTest, ConcurrentReadDuringReclaim, TestSize.Level1)
     std::vector<Entry> reclaimEntries;
     std::vector<Entry> surviveEntries;
     ASSERT_TRUE(PrepareConcurrentDatasets(store, reclaimEntries, surviveEntries));
-    bool checkpointBeforeDelete = CheckpointStore(impl);
     SleepMillis(SETTLE_INTERVAL_MS);
     DiskUsage beforeDelete;
     if (!QueryStoreDiskUsage(storeId, beforeDelete) || beforeDelete.dbBlockBytes == 0) {
@@ -2047,10 +1984,7 @@ HWTEST_F(EnableShrinkTest, ConcurrentReadDuringReclaim, TestSize.Level1)
     context.Init(storeId, surviveEntries, reclaimEntries);
     ConcurrentPhaseResult phase = RunConcurrentPhase(store, impl, context, beforeDelete.dbBlockBytes);
 
-    bool checkpointAfterDelete = CheckpointStore(impl);
     VerifySurvivingEntries(store, context);
-    RecordConcurrentProperties(phase.summary, phase.run, beforeDelete,
-        checkpointBeforeDelete && checkpointAfterDelete, engineEnabled);
     CloseStore(storeId, store);
     if (!phase.run.finalUsage.valid) {
         GTEST_SKIP() << "evidence gap: the RD database directory of the store is not measurable on this image";
