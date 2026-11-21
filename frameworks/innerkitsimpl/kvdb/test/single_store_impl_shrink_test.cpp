@@ -164,8 +164,11 @@ void SingleStoreImplShrinkTest::CloseStore(const std::string &storeId,
 std::shared_ptr<SingleStoreImpl> SingleStoreImplShrinkTest::AsImpl(
     const std::shared_ptr<SingleKvStore> &store)
 {
-    // White-box access is only valid for the in-process store; reject other implementations.
-    return std::dynamic_pointer_cast<SingleStoreImpl>(store);
+    // OHOS builds compile C++ with -fno-rtti (//build/config/compiler:no_rtti), so dynamic_cast
+    // cannot be used here. StoreFactory is the only construction site of SingleKvStore in this
+    // process and always creates SingleStoreImpl (stores_ is map<..., shared_ptr<SingleStoreImpl>>),
+    // so the downcast is valid by construction; call sites still check the result for null.
+    return std::static_pointer_cast<SingleStoreImpl>(store);
 }
 
 HWTEST_F(SingleStoreImplShrinkTest, SetShrinkEnableSQLiteNotSupported, TestSize.Level1)
