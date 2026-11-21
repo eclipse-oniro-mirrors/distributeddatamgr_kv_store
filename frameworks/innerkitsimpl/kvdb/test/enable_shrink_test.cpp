@@ -104,11 +104,10 @@ constexpr int64_t CONCURRENT_P95_FLOOR_MICROS = 1000 * 1000;
 constexpr int64_t READER_YIELD_MS = 1;
 
 constexpr int32_t PERF_WARMUP_ROUNDS = 1;
-// Six measured rounds keep the ABBA order balanced (P,E,E,P,P,E) and let the
-// median tolerate two disturbed rounds; each round already aggregates many
-// interleaved PutBatch chunks. Longer runs crossed into a device throttling
-// phase in real tests, comparing different thermal states instead of shrink.
-constexpr int32_t PERF_ROUNDS = 6;
+// Ten measured rounds keep the ABBA order balanced (P,E,E,P,P,E,E,P,P,E) and
+// let the median tolerate four disturbed rounds. Write and DeleteBatch are
+// measured interleaved, so longer runs compare both stores under the same phase.
+constexpr int32_t PERF_ROUNDS = 10;
 constexpr int32_t PERF_ORDER_CYCLE = 4;
 constexpr int32_t PERF_DELETE_SAMPLES = 200;
 // A 32-key batch is a real "批量编辑" workload and raises the 10% budget from
@@ -845,29 +844,52 @@ std::vector<Key> MakeBatchKeys(const std::vector<Entry> &batchEntries, int32_t b
     return batchKeys;
 }
 
-int64_t MeasureBatchP95(const std::shared_ptr<SingleKvStore> &store, const std::vector<Entry> &batchEntries)
+int64_t MeasureBatchOnce(const std::shared_ptr<SingleKvStore> &store,
+    const std::vector<Key> &batchKeys, bool &ok)
 {
-    std::vector<int64_t> samples;
-    samples.reserve(PERF_BATCH_SAMPLES);
-    int32_t totalBatches = static_cast<int32_t>(batchEntries.size()) / PERF_BATCH_SIZE;
-    for (int32_t batch = 0; batch < totalBatches; ++batch) {
-        auto batchKeys = MakeBatchKeys(batchEntries, batch);
-        auto start = std::chrono::steady_clock::now();
-        bool ok = DeleteBatchChunked(store, batchKeys);
-        int64_t micros = ElapsedMicros(start);
-        EXPECT_TRUE(ok);
-        if (ok && batch >= PERF_BATCH_WARMUP_SAMPLES) {
-            samples.push_back(micros);
-        }
-    }
-    return Percentile(samples, PERCENTILE_95);
+    auto start = std::chrono::steady_clock::now();
+    ok = DeleteBatchChunked(store, batchKeys);
+    return ElapsedMicros(start);
 }
 
-void RunPerfStoreBlock(const std::shared_ptr<SingleKvStore> &store, const std::vector<Entry> &deleteEntries,
-    const std::vector<Entry> &batchEntries, int64_t &deleteP95, int64_t &batchP95)
+void MeasureDeleteP95(const std::shared_ptr<SingleKvStore> &store,
+    const std::vector<Entry> &deleteEntries, int64_t &deleteP95)
 {
     deleteP95 = Percentile(MeasureDeleteLatency(store, deleteEntries), PERCENTILE_95);
-    batchP95 = MeasureBatchP95(store, batchEntries);
+}
+
+void MeasureBatchP95Pair(const PerfContext &context, const std::vector<Entry> &batchEntries,
+    bool plainFirst, int64_t &plainP95, int64_t &enabledP95)
+{
+    std::vector<int64_t> plainSamples;
+    std::vector<int64_t> enabledSamples;
+    plainSamples.reserve(PERF_BATCH_SAMPLES);
+    enabledSamples.reserve(PERF_BATCH_SAMPLES);
+    int32_t totalBatches = static_cast<int32_t>(batchEntries.size()) / PERF_BATCH_SIZE;
+    bool plainFirstBatch = plainFirst;
+    for (int32_t batch = 0; batch < totalBatches; ++batch) {
+        auto batchKeys = MakeBatchKeys(batchEntries, batch);
+        bool plainOk = false;
+        bool enabledOk = false;
+        int64_t plainMicros = 0;
+        int64_t enabledMicros = 0;
+        if (plainFirstBatch) {
+            plainMicros = MeasureBatchOnce(context.plain, batchKeys, plainOk);
+            enabledMicros = MeasureBatchOnce(context.enabled, batchKeys, enabledOk);
+        } else {
+            enabledMicros = MeasureBatchOnce(context.enabled, batchKeys, enabledOk);
+            plainMicros = MeasureBatchOnce(context.plain, batchKeys, plainOk);
+        }
+        EXPECT_TRUE(plainOk);
+        EXPECT_TRUE(enabledOk);
+        if (plainOk && enabledOk && batch >= PERF_BATCH_WARMUP_SAMPLES) {
+            plainSamples.push_back(plainMicros);
+            enabledSamples.push_back(enabledMicros);
+        }
+        plainFirstBatch = !plainFirstBatch;
+    }
+    plainP95 = Percentile(plainSamples, PERCENTILE_95);
+    enabledP95 = Percentile(enabledSamples, PERCENTILE_95);
 }
 
 class ReclaimMonitor {
@@ -961,22 +983,23 @@ void RunPerfRoundBlocks(const PerfContext &context, const std::vector<Entry> &de
     int64_t plainBatch = 0;
     int64_t enabledDelete = 0;
     int64_t enabledBatch = 0;
-    // Both stores are monitored for the whole two-block window, so the monitor
+    // Both stores are monitored for the whole measurement window, so the monitor
     // overhead is symmetric and no longer favors the plain baseline.
     ReclaimMonitor plainMonitor(context.plainId);
     ReclaimMonitor enabledMonitor(context.enabledId);
     plainMonitor.Start();
     enabledMonitor.Start();
     if (plainFirst) {
-        RunPerfStoreBlock(context.plain, deleteEntries, batchEntries, plainDelete, plainBatch);
-        RunPerfStoreBlock(context.enabled, deleteEntries, batchEntries, enabledDelete, enabledBatch);
+        MeasureDeleteP95(context.plain, deleteEntries, plainDelete);
+        MeasureDeleteP95(context.enabled, deleteEntries, enabledDelete);
     } else {
-        RunPerfStoreBlock(context.enabled, deleteEntries, batchEntries, enabledDelete, enabledBatch);
+        MeasureDeleteP95(context.enabled, deleteEntries, enabledDelete);
         if (!WaitReclaimQuiescent(context.enabledId, PERF_QUIESCE_TIMEOUT_MS) && record) {
             perf.quiescenceOk = false;
         }
-        RunPerfStoreBlock(context.plain, deleteEntries, batchEntries, plainDelete, plainBatch);
+        MeasureDeleteP95(context.plain, deleteEntries, plainDelete);
     }
+    MeasureBatchP95Pair(context, batchEntries, plainFirst, plainBatch, enabledBatch);
     plainMonitor.Stop();
     enabledMonitor.Stop();
     if (!record) {
@@ -1143,18 +1166,18 @@ void ExpectPerfResults(const PerfMedians &medians)
     EXPECT_GE(medians.reclaimDropPercent, PERF_RECLAIM_MIN_DROP_PERCENT) <<
         "the enabled store did not show engine reclamation during the measured workload";
     EXPECT_LE(medians.deleteDegradePercent, static_cast<double>(PERF_DEGRADE_LIMIT_PERCENT)) <<
-        "Delete P95 paired median degraded by " << std::fixed << std::setprecision(PERCENT_DECIMALS) <<
+        "Delete P95 median degraded by " << std::fixed << std::setprecision(PERCENT_DECIMALS) <<
         medians.deleteDegradePercent << "% (plain median=" << medians.plainDeleteP95 <<
         " us, enabled median=" << medians.enabledDeleteP95 << " us, allowed=" <<
         PERF_DEGRADE_LIMIT_PERCENT << "%)" << std::defaultfloat;
     EXPECT_LE(medians.batchDegradePercent, static_cast<double>(PERF_DEGRADE_LIMIT_PERCENT)) <<
-        "DeleteBatch P95 paired median degraded by " << std::fixed <<
+        "DeleteBatch P95 median degraded by " << std::fixed <<
         std::setprecision(PERCENT_DECIMALS) << medians.batchDegradePercent <<
         "% (plain median=" << medians.plainBatchP95 << " us, enabled median=" <<
         medians.enabledBatchP95 << " us, allowed=" << PERF_DEGRADE_LIMIT_PERCENT << "%)" <<
         std::defaultfloat;
     EXPECT_LE(medians.writeDegradePercent, static_cast<double>(PERF_DEGRADE_LIMIT_PERCENT)) <<
-        "PutBatch throughput paired median degraded by " << std::fixed <<
+        "PutBatch throughput median degraded by " << std::fixed <<
         std::setprecision(PERCENT_DECIMALS) << medians.writeDegradePercent << "% (plain median=" <<
         medians.plainWrite << " bytes/sec, enabled median=" << medians.enabledWrite <<
         " bytes/sec, allowed=" << PERF_DEGRADE_LIMIT_PERCENT << "%)" << std::defaultfloat;
@@ -1167,7 +1190,8 @@ void PrintPerfConfig()
         PERF_BATCH_SAMPLES << " batch_size=" << PERF_BATCH_SIZE << " value_size=" <<
         PERF_VALUE_SIZE << " delete_warmup=" << PERF_DELETE_WARMUP_SAMPLES <<
         " batch_warmup=" << PERF_BATCH_WARMUP_SAMPLES << " order_cycle=" << PERF_ORDER_CYCLE <<
-        " write_mode=interleaved limit=" << PERF_DEGRADE_LIMIT_PERCENT << "%" << std::endl;
+        " write_mode=interleaved batch_mode=interleaved limit=" <<
+        PERF_DEGRADE_LIMIT_PERCENT << "%" << std::endl;
 }
 
 void PrintPerfMedianSummary(const PerfMedians &medians)
