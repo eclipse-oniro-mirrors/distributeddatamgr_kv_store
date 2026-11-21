@@ -390,6 +390,24 @@ public:
     {
         return Status::NOT_SUPPORT;
     }
+
+    /**
+     * @brief Requests the asynchronous GaussDB RD shrink switch.
+     * SUCCESS only means the request was accepted. Only a LOCAL_ONLY store that is not public
+     * supports enabling; other stores return NOT_SUPPORT for enable and SUCCESS for the idempotent
+     * disable. The default implementation follows the same rule (disable is idempotent SUCCESS).
+     * An overridden implementation returns ALREADY_CLOSED for a closed store before the support
+     * check; the default implementation has no store state and only serves as the unsupported
+     * fallback. The actual engine is not probed on the open path; an unsupported engine is
+     * handled by the background call (warning for NOT_SUPPORT/BUSY/TIMEOUT; log/DFX for DB_ERROR).
+     * @param enable True to request enable, false to request disable.
+     * @return SUCCESS if accepted, ALREADY_CLOSED if closed, NOT_SUPPORT if enable is unsupported,
+     * DB_ERROR if the background task could not be scheduled (the request is not retained).
+     */
+    virtual Status SetShrinkEnable(bool enable)
+    {
+        return enable ? Status::NOT_SUPPORT : Status::SUCCESS;
+    }
 };
 }  // namespace DistributedKv
 }  // namespace OHOS

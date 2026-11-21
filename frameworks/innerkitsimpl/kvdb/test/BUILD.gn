@@ -87,6 +87,7 @@ ohos_source_set("kvdb_src_file") {
     "../src/process_communication_impl.cpp",
     "../src/process_system_api_adapter_impl.cpp",
     "../src/security_manager.cpp",
+    "../src/shrink_manager.cpp",
     "../src/single_store_impl.cpp",
     "../src/store_factory.cpp",
     "../src/store_manager.cpp",
@@ -172,6 +173,8 @@ ohos_unittest("SingleStoreImplTest") {
 
   sources = [
     "../../kvdb/src/kv_hiview_reporter_mock.cpp",
+    "enable_shrink_test.cpp",
+    "single_store_impl_shrink_test.cpp",
     "single_store_impl_test.cpp",
   ]
 
@@ -463,6 +466,7 @@ ohos_unittest("StoreFactoryMockTest") {
     "../src/kv_types_util.cpp",
     "../src/kvdb_service_client.cpp",
     "../src/observer_bridge.cpp",
+    "../src/shrink_manager.cpp",
     "../src/single_store_impl.cpp",
     "../src/store_factory.cpp",
     "../src/store_manager.cpp",
@@ -545,6 +549,7 @@ ohos_unittest("SingleStoreImplMockTest") {
     "../src/device_convertor.cpp",
     "../src/kv_types_util.cpp",
     "../src/security_manager.cpp",
+    "../src/shrink_manager.cpp",
     "../src/single_store_impl.cpp",
     "../src/store_factory.cpp",
     "../src/store_manager.cpp",
@@ -690,6 +695,7 @@ ohos_unittest("StoreManagerMockTest") {
     "../src/device_convertor.cpp",
     "../src/kv_types_util.cpp",
     "../src/security_manager.cpp",
+    "../src/shrink_manager.cpp",
     "../src/single_store_impl.cpp",
     "../src/store_factory.cpp",
     "../src/store_manager.cpp",

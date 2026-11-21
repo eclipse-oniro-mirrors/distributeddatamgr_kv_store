@@ -26,6 +26,7 @@
 #include "kvdb_service.h"
 #include "kvstore_death_recipient.h"
 #include "observer_bridge.h"
+#include "shrink_manager.h"
 #include "single_kvstore.h"
 #include "sync_observer.h"
 #include "task_executor.h"
@@ -80,6 +81,8 @@ public:
     Status DeleteBackup(const std::vector<std::string> &files, const std::string &baseDir,
         std::map<std::string, DistributedKv::Status> &status) override;
     Status Rekey() override;
+    Status SetShrinkEnable(bool enable) override;
+    void GetShrinkStateForTest(bool &desiredEnabled, uint32_t &pendingTasks) const;
     void OnRemoteDied() override;
     bool IsRebuild() override;
     // normal function
@@ -131,6 +134,7 @@ private:
     Status GetResultSet(const DBQuery &query, std::shared_ptr<ResultSet> &resultSet) const;
     Status GetEntries(const DBQuery &query, std::vector<Entry> &entries) const;
     Status RetryWithCheckPoint(std::function<DistributedDB::DBStatus()> lambda);
+    void RunShrink(bool enable);
     std::function<void(ObserverBridge *)> BridgeReleaser();
     Status DoSync(SyncInfo &syncInfo, std::shared_ptr<SyncCallback> observer);
     Status DoClientSync(SyncInfo &syncInfo, std::shared_ptr<SyncCallback> observer);
@@ -169,6 +173,12 @@ private:
     std::mutex notifyMutex_;
     uint64_t notifyExpiredTime_ = 0;
     std::shared_ptr<DBStore> dbStore_ = nullptr;
+    // Whether this store accepts shrink requests. Decided by store type and isPublic only;
+    // the actual engine capability is intentionally not probed on the open path.
+    bool shrinkAccepted_ = false;
+    ShrinkManager shrinkManager_;
+    // Serializes shrink submissions so a failed enqueue can restore the exact previous desired state.
+    std::mutex shrinkSubmitMutex_;
     std::shared_ptr<SyncObserver> syncObserver_ = nullptr;
     ConcurrentMap<uintptr_t, std::pair<uint32_t, std::shared_ptr<ObserverBridge>>> observers_;
     ConcurrentMap<uint64_t, AsyncFunc> asyncFuncs_;

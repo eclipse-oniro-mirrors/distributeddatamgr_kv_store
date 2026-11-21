@@ -56,6 +56,8 @@ enum : int {
     PRAGMA_REMOVE_LOCAL_DATA_BY_KEY_PATTERN,
     PRAGMA_SET_HIGH_PERFORMANCE_READ_MODE,
     PRAGMA_GET_PAGE_SIZE,
+    // Parameter type is ShrinkParam*; SET is production, GET is test/diagnostics only.
+    PRAGMA_SHRINK,
 };
 
 struct PragmaSync {

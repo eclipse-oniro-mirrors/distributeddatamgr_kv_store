@@ -26,7 +26,7 @@
 #include "kvdb_pragma.h"
 #include "storage_engine_manager.h"
 #include "grd_api_manager.h"
-#include "grd_base/grd_db_api.h"
+#include "grd_base/grd_error.h"
 #include "grd_base/grd_type_export.h"
 
 using namespace testing::ext;
@@ -44,6 +44,32 @@ namespace {
     RdSingleVerNaturalStoreConnection *g_connection = nullptr;
     RdSingleVerStorageExecutor *g_handle = nullptr;
     RdSingleVerStorageExecutor *g_nullHandle = nullptr;
+    int32_t g_shrinkSetResult = GRD_OK;
+    int32_t g_shrinkGetResult = GRD_OK;
+    bool g_shrinkSetValue = false;
+    bool g_shrinkGetValue = true;
+    int g_shrinkSetCalls = 0;
+    int g_shrinkGetCalls = 0;
+    constexpr int32_t INVALID_SHRINK_OPERATION = 100;
+    constexpr int EXPECTED_SET_CALLS_AFTER_REPEAT = 2;
+
+    int32_t FakeKVSetDbShrinkEnable(GRD_DB *db, bool enable)
+    {
+        (void)db;
+        g_shrinkSetValue = enable;
+        g_shrinkSetCalls++;
+        return g_shrinkSetResult;
+    }
+
+    int32_t FakeKVGetDbShrinkEnable(GRD_DB *db, bool *enable)
+    {
+        (void)db;
+        g_shrinkGetCalls++;
+        if (g_shrinkGetResult == GRD_OK && enable != nullptr) {
+            *enable = g_shrinkGetValue;
+        }
+        return g_shrinkGetResult;
+    }
 }
 
 class DistributedDBStorageRdSingleVerNaturalExecutorTest : public testing::Test {
@@ -645,6 +671,102 @@ HWTEST_F(DistributedDBStorageRdSingleVerNaturalExecutorTest, PragmaGetPageSize_N
 
     EXPECT_EQ(ret, -E_INVALID_DATA);
     EXPECT_EQ(pageSize, -1);
+}
+
+namespace {
+void CheckShrinkSetGetPassThrough()
+{
+    g_shrinkSetCalls = 0;
+    g_shrinkGetCalls = 0;
+    g_shrinkSetResult = GRD_OK;
+    g_shrinkGetResult = GRD_OK;
+    ShrinkParam param;
+    param.operation = ShrinkOperation::SET;
+    param.enable = true;
+    EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, &param), E_OK);
+    EXPECT_EQ(g_shrinkSetCalls, 1);
+    EXPECT_TRUE(g_shrinkSetValue);
+    EXPECT_EQ(g_shrinkGetCalls, 0);
+    param.enable = false;
+    EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, &param), E_OK);
+    EXPECT_EQ(g_shrinkSetCalls, EXPECTED_SET_CALLS_AFTER_REPEAT);
+    EXPECT_FALSE(g_shrinkSetValue);
+    EXPECT_EQ(g_shrinkGetCalls, 0);
+    g_shrinkGetValue = true;
+    param.operation = ShrinkOperation::GET;
+    param.enable = false;
+    EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, &param), E_OK);
+    EXPECT_EQ(g_shrinkGetCalls, 1);
+    EXPECT_TRUE(param.enable);
+}
+
+void CheckShrinkErrorConversion()
+{
+    ShrinkParam param;
+    g_shrinkGetResult = GRD_RESOURCE_BUSY;
+    param.operation = ShrinkOperation::GET;
+    param.enable = true;
+    EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, &param), -E_BUSY);
+    EXPECT_TRUE(param.enable);
+    g_shrinkSetResult = GRD_TIME_OUT;
+    param.operation = ShrinkOperation::SET;
+    param.enable = true;
+    EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, &param), -E_TIMEOUT);
+    int setCallsBeforeInvalid = g_shrinkSetCalls;
+    ShrinkParam invalidParam;
+    invalidParam.operation = static_cast<ShrinkOperation>(INVALID_SHRINK_OPERATION);
+    EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, &invalidParam), -E_INVALID_ARGS);
+    EXPECT_EQ(g_shrinkSetCalls, setCallsBeforeInvalid);
+}
+} // namespace
+
+HWTEST_F(DistributedDBStorageRdSingleVerNaturalExecutorTest, PragmaShrinkSetGet001, TestSize.Level1)
+{
+    // Parameter validation: a null parameter and a null handle are rejected before touching the engine.
+    EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, nullptr), -E_INVALID_ARGS);
+    EXPECT_EQ(g_nullHandle->SetShrinkEnable(true), -E_INVALID_DB);
+    bool nullActual = true;
+    EXPECT_EQ(g_nullHandle->GetShrinkEnable(nullActual), -E_INVALID_DB);
+
+    DocumentDB::GRD_APIInfo *apiInfo = DocumentDB::GetApiInfo();
+    auto originalSet = apiInfo->KVSetDbShrinkEnableApi;
+    auto originalGet = apiInfo->KVGetDbShrinkEnableApi;
+    apiInfo->KVSetDbShrinkEnableApi = FakeKVSetDbShrinkEnable;
+    apiInfo->KVGetDbShrinkEnableApi = FakeKVGetDbShrinkEnable;
+    CheckShrinkSetGetPassThrough();
+    CheckShrinkErrorConversion();
+    apiInfo->KVSetDbShrinkEnableApi = originalSet;
+    apiInfo->KVGetDbShrinkEnableApi = originalGet;
+}
+
+HWTEST_F(DistributedDBStorageRdSingleVerNaturalExecutorTest, PragmaShrinkNullApi, TestSize.Level1)
+{
+    DocumentDB::GRD_APIInfo *apiInfo = DocumentDB::GetApiInfo();
+    auto originalSet = apiInfo->KVSetDbShrinkEnableApi;
+    auto originalGet = apiInfo->KVGetDbShrinkEnableApi;
+    ShrinkParam param;
+    param.operation = ShrinkOperation::SET;
+    param.enable = true;
+
+    apiInfo->KVSetDbShrinkEnableApi = nullptr;
+    EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, &param), -E_INTERNAL_ERROR);
+    apiInfo->KVSetDbShrinkEnableApi = originalSet;
+
+    apiInfo->KVGetDbShrinkEnableApi = nullptr;
+    param.operation = ShrinkOperation::GET;
+    param.enable = true;
+    EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, &param), -E_INTERNAL_ERROR);
+    EXPECT_TRUE(param.enable);
+    apiInfo->KVGetDbShrinkEnableApi = originalGet;
+}
+
+HWTEST_F(DistributedDBStorageRdSingleVerNaturalExecutorTest, PragmaShrinkNullExecutor, TestSize.Level1)
+{
+    RdSingleVerNaturalStoreConnection connection(nullptr);
+    ShrinkParam param;
+    param.operation = ShrinkOperation::SET;
+    param.enable = true;
+    EXPECT_EQ(connection.Pragma(PRAGMA_SHRINK, &param), -E_NOT_INIT);
 }
 
 namespace {

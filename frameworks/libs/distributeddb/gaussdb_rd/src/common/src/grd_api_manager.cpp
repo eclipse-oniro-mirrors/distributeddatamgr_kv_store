@@ -119,6 +119,8 @@ void GRD_DBApiInitEnhance(GRD_APIInfo &GRD_DBApiInfo)
     GRD_DBApiInfo.KVBatchDelApi = (KVBatchDel)dlsym(g_library, "GRD_KVBatchDel");
     GRD_DBApiInfo.KVBatchDestroyApi = (KVBatchDestroy)dlsym(g_library, "GRD_KVBatchDestroy");
     GRD_DBApiInfo.GetConfigApi = (GetConfig)dlsym(g_library, "GRD_GetConfig");
+    GRD_DBApiInfo.KVSetDbShrinkEnableApi = (KVSetDbShrinkEnable)dlsym(g_library, "GRD_KVSetDbShrinkEnable");
+    GRD_DBApiInfo.KVGetDbShrinkEnableApi = (KVGetDbShrinkEnable)dlsym(g_library, "GRD_KVGetDbShrinkEnable");
 #endif
 }
 

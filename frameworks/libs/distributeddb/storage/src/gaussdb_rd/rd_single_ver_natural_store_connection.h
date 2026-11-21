@@ -121,6 +121,7 @@ private:
     static int CheckOption(const IOption &option, SingleVerDataType &type);
     int ForceCheckPoint() const;
     int GetPageSize(void *parameter) const;
+    int ProcessShrink(void *parameter) const;
     mutable std::mutex kvDbResultSetsMutex_;
     mutable std::set<IKvDBResultSet *> kvDbResultSets_;
 

@@ -137,6 +137,18 @@ enum PragmaCmd {
     REMOVE_LOCAL_DATA_BY_KEY_PATTERN,
     SET_HIGH_PERFORMANCE_READ_MODE,
     GET_PAGE_SIZE,
+    // SET is the production path; GET is test/diagnostics only. Pragma parameter type is ShrinkParam*.
+    SHRINK,
+};
+
+enum class ShrinkOperation : uint32_t {
+    SET = 0,
+    GET = 1,
+};
+
+struct ShrinkParam {
+    ShrinkOperation operation = ShrinkOperation::SET;
+    bool enable = false;
 };
 
 enum ResolutionPolicyType {

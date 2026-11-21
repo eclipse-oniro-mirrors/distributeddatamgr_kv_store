@@ -12,8 +12,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
 #include <memory>
+#include <mutex>
+#include <queue>
 #include <sys/types.h>
+#include <thread>
 #include <unistd.h>
 
 #include <gmock/gmock.h>
@@ -26,6 +33,7 @@
 #include "include/kvdb_service_client_mock.h"
 #include "include/observer_bridge_mock.h"
 #include "include/task_executor_mock.h"
+#include "kv_store_nb_delegate.h"
 #include "kvstore_observer.h"
 #include "single_store_impl.h"
 #include "store_factory.h"
@@ -38,6 +46,269 @@ using namespace DistributedDB;
 
 static StoreId storeId = { "single_test" };
 static AppId appId = { "rekey" };
+
+namespace {
+constexpr int WAIT_POLL_INTERVAL_MS = 10;
+constexpr int SHRINK_WAIT_TIMEOUT_MS = 5000;
+constexpr int32_t MOCK_PAGE_SIZE = 4;
+
+struct ShrinkState {
+    bool desired = true;
+    uint32_t pending = 0;
+};
+
+ShrinkState GetShrinkState(const std::shared_ptr<SingleStoreImpl> &store)
+{
+    ShrinkState state{};
+    store->GetShrinkStateForTest(state.desired, state.pending);
+    return state;
+}
+
+bool WaitShrinkState(const std::shared_ptr<SingleStoreImpl> &store, bool desired, uint32_t pending,
+    std::chrono::milliseconds timeout = std::chrono::milliseconds(SHRINK_WAIT_TIMEOUT_MS))
+{
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        auto state = GetShrinkState(store);
+        if (state.desired == desired && state.pending == pending) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_POLL_INTERVAL_MS));
+    }
+    auto state = GetShrinkState(store);
+    return state.desired == desired && state.pending == pending;
+}
+} // namespace
+
+class ShrinkMockDelegate : public DistributedDB::KvStoreNbDelegate {
+public:
+    using DBKey = DistributedDB::Key;
+    using DBValue = DistributedDB::Value;
+    using DBEntry = DistributedDB::Entry;
+    using DBQuery = DistributedDB::Query;
+    using DBResultSet = DistributedDB::KvStoreResultSet;
+    using DBStatus = DistributedDB::DBStatus;
+
+    DBStatus Pragma(PragmaCmd cmd, PragmaData &paramData) override
+    {
+        if (cmd == GET_PAGE_SIZE) {
+            // Test guard: production code must not probe the engine on the open path anymore.
+            // Count the calls so tests can assert zero; keep filling the page size so this mock
+            // remains usable by a future GetPageSize case.
+            auto pageSize = static_cast<int32_t *>(paramData);
+            if (pageSize != nullptr) {
+                *pageSize = MOCK_PAGE_SIZE;
+            }
+            pageSizeCalls_++;
+            return DBStatus::OK;
+        }
+        if (cmd != SHRINK) {
+            return DBStatus::NOT_SUPPORT;
+        }
+        auto param = static_cast<ShrinkParam *>(paramData);
+        if (param == nullptr || param->operation != ShrinkOperation::SET) {
+            return DBStatus::INVALID_ARGS;
+        }
+        setCalls_++;
+        {
+            std::unique_lock<std::mutex> lock(gateMutex_);
+            gateCondition_.wait(lock, [this]() { return !blocked_; });
+        }
+        DBStatus status = DBStatus::OK;
+        {
+            std::lock_guard<std::mutex> lock(gateMutex_);
+            if (!statusQueue_.empty()) {
+                status = statusQueue_.front();
+                statusQueue_.pop();
+            }
+        }
+        if (status != DBStatus::OK) {
+            return status;
+        }
+        actual_.store(param->enable);
+        return DBStatus::OK;
+    }
+
+    DBStatus Get(const DBKey &, DBValue &) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetEntries(const DBKey &, std::vector<DBEntry> &) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetEntries(const DBKey &, DBResultSet *&) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetEntries(const DBQuery &, std::vector<DBEntry> &) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetEntries(const DBQuery &, DBResultSet *&) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetCount(const DBQuery &, int &) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus CloseResultSet(DBResultSet *&) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus Put(const DBKey &, const DBValue &) override { return DBStatus::OK; }
+    DBStatus PutBatch(const std::vector<DBEntry> &) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus DeleteBatch(const std::vector<DBKey> &) override { return DBStatus::OK; }
+    DBStatus Delete(const DBKey &) override { return DBStatus::OK; }
+    DBStatus GetLocal(const DBKey &, DBValue &) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetLocalEntries(const DBKey &, std::vector<DBEntry> &) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus PutLocal(const DBKey &, const DBValue &) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus DeleteLocal(const DBKey &) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus PublishLocal(const DBKey &, bool, bool, const DistributedDB::KvStoreNbPublishOnConflict &) override
+    {
+        return DBStatus::NOT_SUPPORT;
+    }
+    DBStatus UnpublishToLocal(const DBKey &, bool, bool) override { return DBStatus::NOT_SUPPORT; }
+    std::string GetStoreId() const override { return "shrink_mock"; }
+    DBStatus SetConflictNotifier(int, const DistributedDB::KvStoreNbConflictNotifier &) override
+    {
+        return DBStatus::OK;
+    }
+    DBStatus Rekey(const DistributedDB::CipherPassword &) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus Export(const std::string &, const DistributedDB::CipherPassword &, bool) override
+    {
+        return DBStatus::NOT_SUPPORT;
+    }
+    DBStatus Import(const std::string &, const DistributedDB::CipherPassword &, bool) override
+    {
+        return DBStatus::NOT_SUPPORT;
+    }
+    DBStatus StartTransaction() override { return DBStatus::NOT_SUPPORT; }
+    DBStatus Commit() override { return DBStatus::NOT_SUPPORT; }
+    DBStatus Rollback() override { return DBStatus::NOT_SUPPORT; }
+    DBStatus PutLocalBatch(const std::vector<DBEntry> &) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus DeleteLocalBatch(const std::vector<DBKey> &) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetSecurityOption(DistributedDB::SecurityOption &) const override { return DBStatus::OK; }
+    DBStatus CheckIntegrity() const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetKeys(const DBKey &, std::vector<DBKey> &) const override { return DBStatus::NOT_SUPPORT; }
+    DBStatus UpdateKey(const DistributedDB::UpdateKeyCallback &) override { return DBStatus::NOT_SUPPORT; }
+    DBStatus GetDeviceEntries(const std::string &, std::vector<DBEntry> &) const override
+    {
+        return DBStatus::NOT_SUPPORT;
+    }
+
+    void BlockSet()
+    {
+        std::lock_guard<std::mutex> lock(gateMutex_);
+        blocked_ = true;
+    }
+
+    void ReleaseSet()
+    {
+        {
+            std::lock_guard<std::mutex> lock(gateMutex_);
+            blocked_ = false;
+        }
+        gateCondition_.notify_all();
+    }
+
+    void SetNextStatus(DBStatus status)
+    {
+        std::lock_guard<std::mutex> lock(gateMutex_);
+        statusQueue_.push(status);
+    }
+
+    bool WaitSetCalls(int expected)
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (setCalls_.load() >= expected) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_POLL_INTERVAL_MS));
+        }
+        return setCalls_.load() >= expected;
+    }
+
+    bool WaitActual(bool expected)
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (actual_.load() == expected) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_POLL_INTERVAL_MS));
+        }
+        return actual_.load() == expected;
+    }
+
+    std::atomic<int> setCalls_ { 0 };
+    std::atomic<int> pageSizeCalls_ { 0 };
+    std::atomic<bool> actual_ { false };
+
+private:
+    bool blocked_ = false;
+    std::mutex gateMutex_;
+    std::condition_variable gateCondition_;
+    std::queue<DBStatus> statusQueue_;
+};
+
+std::shared_ptr<SingleStoreImpl> CreateShrinkStore(const std::shared_ptr<ShrinkMockDelegate> &delegate,
+    Convertor &convertor, KvStoreType type = KvStoreType::LOCAL_ONLY, bool isPublic = false)
+{
+    Options options;
+    options.kvStoreType = type;
+    options.isPublic = isPublic;
+    options.securityLevel = S2;
+    options.area = EL1;
+    options.baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
+    options.backup = false;
+    options.syncable = false;
+    AppId appId = { "SingleStoreImplTest" };
+    return std::make_shared<SingleStoreImpl>(delegate, appId, options, convertor);
+}
+
+// Minimal concrete SingleKvStore used only to exercise the base-class default
+// SetShrinkEnable implementation (F2: enable -> NOT_SUPPORT, disable -> SUCCESS).
+class DefaultShrinkKvStoreFake : public SingleKvStore {
+public:
+    Status Get(const Key &, Value &) override { return Status::NOT_SUPPORT; }
+    Status GetEntries(const Key &, std::vector<Entry> &) const override { return Status::NOT_SUPPORT; }
+    Status GetEntries(const DataQuery &, std::vector<Entry> &) const override { return Status::NOT_SUPPORT; }
+    Status GetResultSet(const Key &, std::shared_ptr<KvStoreResultSet> &) const override
+    {
+        return Status::NOT_SUPPORT;
+    }
+    Status GetResultSet(const DataQuery &, std::shared_ptr<KvStoreResultSet> &) const override
+    {
+        return Status::NOT_SUPPORT;
+    }
+    Status CloseResultSet(std::shared_ptr<KvStoreResultSet> &) override { return Status::NOT_SUPPORT; }
+    Status GetCount(const DataQuery &, int &) const override { return Status::NOT_SUPPORT; }
+    Status RemoveDeviceData(const std::string &) override { return Status::NOT_SUPPORT; }
+    Status GetSecurityLevel(SecurityLevel &) const override { return Status::NOT_SUPPORT; }
+    Status Sync(const std::vector<std::string> &, SyncMode, uint32_t) override { return Status::NOT_SUPPORT; }
+    Status RegisterSyncCallback(std::shared_ptr<KvStoreSyncCallback>) override { return Status::NOT_SUPPORT; }
+    Status UnRegisterSyncCallback() override { return Status::NOT_SUPPORT; }
+    Status SetSyncParam(const KvSyncParam &) override { return Status::NOT_SUPPORT; }
+    Status GetSyncParam(KvSyncParam &) override { return Status::NOT_SUPPORT; }
+    Status SetCapabilityEnabled(bool) const override { return Status::NOT_SUPPORT; }
+    Status SetCapabilityRange(const std::vector<std::string> &, const std::vector<std::string> &) const override
+    {
+        return Status::NOT_SUPPORT;
+    }
+    Status SubscribeWithQuery(const std::vector<std::string> &, const DataQuery &) override
+    {
+        return Status::NOT_SUPPORT;
+    }
+    Status UnsubscribeWithQuery(const std::vector<std::string> &, const DataQuery &) override
+    {
+        return Status::NOT_SUPPORT;
+    }
+    StoreId GetStoreId() const override { return StoreId(); }
+    Status Put(const Key &, const Value &) override { return Status::NOT_SUPPORT; }
+    Status PutBatch(const std::vector<Entry> &) override { return Status::NOT_SUPPORT; }
+    Status Delete(const Key &) override { return Status::NOT_SUPPORT; }
+    Status DeleteBatch(const std::vector<Key> &) override { return Status::NOT_SUPPORT; }
+    Status StartTransaction() override { return Status::NOT_SUPPORT; }
+    Status Commit() override { return Status::NOT_SUPPORT; }
+    Status Rollback() override { return Status::NOT_SUPPORT; }
+    Status SubscribeKvStore(SubscribeType, std::shared_ptr<KvStoreObserver>) override
+    {
+        return Status::NOT_SUPPORT;
+    }
+    Status UnSubscribeKvStore(SubscribeType, std::shared_ptr<KvStoreObserver>) override
+    {
+        return Status::NOT_SUPPORT;
+    }
+    Status Backup(const std::string &, const std::string &) override { return Status::NOT_SUPPORT; }
+    Status Restore(const std::string &, const std::string &) override { return Status::NOT_SUPPORT; }
+    Status DeleteBackup(const std::vector<std::string> &, const std::string &,
+        std::map<std::string, DistributedKv::Status> &) override
+    {
+        return Status::NOT_SUPPORT;
+    }
+};
 
 class SingleStoreImplMockTest : public testing::Test {
 public:
@@ -1435,5 +1706,148 @@ HWTEST_F(SingleStoreImplMockTest, SetDbConfigReturnsErrorWhenPragmaFails, testin
         GTEST_LOG_(INFO) << "SingleStoreImplMockTest-an exception occurred by SetDbConfigReturnsErrorWhenPragmaFails";
     }
     GTEST_LOG_(INFO) << "SingleStoreImplMockTest-end SetDbConfigReturnsErrorWhenPragmaFails";
+}
+
+HWTEST_F(SingleStoreImplMockTest, SetShrinkEnableAsyncAndDedupe, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    delegate->BlockSet();
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    ASSERT_TRUE(delegate->WaitSetCalls(1));
+    ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    auto dedupeState = GetShrinkState(store);
+    EXPECT_EQ(dedupeState.pending, 1u);
+    EXPECT_EQ(delegate->setCalls_.load(), 1);
+    delegate->ReleaseSet();
+    ASSERT_TRUE(delegate->WaitActual(true));
+    ASSERT_TRUE(WaitShrinkState(store, true, 0));
+    EXPECT_EQ(delegate->setCalls_.load(), 1);
+    ASSERT_EQ(store->SetShrinkEnable(false), SUCCESS);
+    ASSERT_TRUE(delegate->WaitSetCalls(2));
+    ASSERT_TRUE(delegate->WaitActual(false));
+    ASSERT_TRUE(WaitShrinkState(store, false, 0));
+    ASSERT_EQ(store->SetShrinkEnable(false), SUCCESS);
+    ASSERT_TRUE(delegate->WaitSetCalls(3));
+    ASSERT_TRUE(WaitShrinkState(store, false, 0));
+    EXPECT_EQ(store->Close(true), 0);
+}
+
+HWTEST_F(SingleStoreImplMockTest, ShrinkFailureStatuses, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    const std::vector<DBStatus> statuses = { DBStatus::BUSY, DBStatus::TIME_OUT, DBStatus::NOT_SUPPORT,
+        DBStatus::DB_ERROR };
+    for (size_t index = 0; index < statuses.size(); ++index) {
+        delegate->SetNextStatus(statuses[index]);
+        ASSERT_EQ(store->SetShrinkEnable(true), SUCCESS);
+        ASSERT_TRUE(delegate->WaitSetCalls(static_cast<int>(index) + 1));
+        ASSERT_TRUE(WaitShrinkState(store, true, 0));
+        EXPECT_FALSE(delegate->actual_.load());
+    }
+    EXPECT_EQ(store->Close(true), 0);
+}
+
+HWTEST_F(SingleStoreImplMockTest, DisableSkipsNotStartedTask, testing::ext::TestSize.Level1)
+{
+    auto blockerDelegate = std::make_shared<ShrinkMockDelegate>();
+    auto targetDelegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto blocker = CreateShrinkStore(blockerDelegate, convertor);
+    auto target = CreateShrinkStore(targetDelegate, convertor);
+    ASSERT_NE(blocker, nullptr);
+    ASSERT_NE(target, nullptr);
+    struct UnblockGuard {
+        explicit UnblockGuard(ShrinkMockDelegate &setDelegate) : delegate(setDelegate) {}
+        ~UnblockGuard() { delegate.ReleaseSet(); }
+        ShrinkMockDelegate &delegate;
+    } guard(*blockerDelegate);
+    blockerDelegate->BlockSet();
+    ASSERT_EQ(blocker->SetShrinkEnable(true), SUCCESS);
+    ASSERT_TRUE(blockerDelegate->WaitSetCalls(1));
+    ASSERT_EQ(target->SetShrinkEnable(true), SUCCESS);
+    ASSERT_EQ(target->SetShrinkEnable(false), SUCCESS);
+    blockerDelegate->ReleaseSet();
+    ASSERT_TRUE(blockerDelegate->WaitActual(true));
+    ASSERT_TRUE(WaitShrinkState(target, false, 0));
+    EXPECT_EQ(targetDelegate->setCalls_.load(), 1);
+    EXPECT_FALSE(targetDelegate->actual_.load());
+    EXPECT_EQ(blocker->Close(true), 0);
+    EXPECT_EQ(target->Close(true), 0);
+}
+
+HWTEST_F(SingleStoreImplMockTest, NoEngineProbeOnOpen, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    EXPECT_EQ(delegate->pageSizeCalls_.load(), 0);
+    EXPECT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    ASSERT_TRUE(delegate->WaitSetCalls(1));
+    ASSERT_TRUE(WaitShrinkState(store, true, 0));
+    EXPECT_EQ(delegate->pageSizeCalls_.load(), 0);
+    EXPECT_EQ(store->Close(true), 0);
+}
+
+HWTEST_F(SingleStoreImplMockTest, IsPublicLocalOnlyNotSupported, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor, KvStoreType::LOCAL_ONLY, true);
+    ASSERT_NE(store, nullptr);
+    EXPECT_EQ(store->SetShrinkEnable(true), NOT_SUPPORT);
+    EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
+    EXPECT_EQ(delegate->setCalls_.load(), 0);
+    EXPECT_EQ(delegate->pageSizeCalls_.load(), 0);
+    auto state = GetShrinkState(store);
+    EXPECT_FALSE(state.desired);
+    EXPECT_EQ(state.pending, 0u);
+    EXPECT_EQ(store->Close(true), 0);
+}
+
+HWTEST_F(SingleStoreImplMockTest, LocalOnlyFallbackAccepted, testing::ext::TestSize.Level1)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    delegate->SetNextStatus(DBStatus::NOT_SUPPORT);
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    EXPECT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    ASSERT_TRUE(delegate->WaitSetCalls(1));
+    ASSERT_TRUE(WaitShrinkState(store, true, 0));
+    EXPECT_FALSE(delegate->actual_.load());
+    EXPECT_EQ(store->Close(true), 0);
+}
+
+HWTEST_F(SingleStoreImplMockTest, NonLocalOnlyTypesNotSupported, testing::ext::TestSize.Level1)
+{
+    const std::vector<KvStoreType> types = { KvStoreType::SINGLE_VERSION, KvStoreType::DEVICE_COLLABORATION };
+    for (auto type : types) {
+        auto delegate = std::make_shared<ShrinkMockDelegate>();
+        Convertor convertor;
+        auto store = CreateShrinkStore(delegate, convertor, type);
+        ASSERT_NE(store, nullptr);
+        EXPECT_EQ(store->SetShrinkEnable(true), NOT_SUPPORT);
+        EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
+        EXPECT_EQ(delegate->setCalls_.load(), 0);
+        EXPECT_EQ(delegate->pageSizeCalls_.load(), 0);
+        auto state = GetShrinkState(store);
+        EXPECT_FALSE(state.desired);
+        EXPECT_EQ(state.pending, 0u);
+        EXPECT_EQ(store->Close(true), 0);
+    }
+}
+
+HWTEST_F(SingleStoreImplMockTest, DefaultSetShrinkEnableContract, testing::ext::TestSize.Level1)
+{
+    DefaultShrinkKvStoreFake store;
+    EXPECT_EQ(store.SetShrinkEnable(true), NOT_SUPPORT);
+    EXPECT_EQ(store.SetShrinkEnable(false), SUCCESS);
 }
 } // namespace OHOS::DistributedKv

@@ -192,6 +192,10 @@ public:
 
     int ForceCheckPoint() const;
 
+    int SetShrinkEnable(bool enable) const;
+
+    int GetShrinkEnable(bool &enable) const;
+
     uint64_t GetLogFileSize() const;
 
     int GetExistsDevicesFromMeta(std::set<std::string> &devices);

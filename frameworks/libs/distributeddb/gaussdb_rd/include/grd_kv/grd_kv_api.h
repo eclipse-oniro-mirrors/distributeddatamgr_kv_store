@@ -16,6 +16,7 @@
 #ifndef GRD_KV_API_H
 #define GRD_KV_API_H
 
+#include <stdbool.h>
 #include <cstdint>
 
 #include "grd_base/grd_resultset_api.h"
@@ -52,6 +53,11 @@ GRD_API int32_t GRD_KVBatchPut(GRD_DB *db, const char *collectionName, GRD_KVBat
 GRD_API int32_t GRD_KVBatchDel(GRD_DB *db, const char *collectionName, GRD_KVBatchT *batch);
 
 GRD_API int32_t GRD_KVBatchDestroy(GRD_KVBatchT *batch);
+
+// Runtime switch of the GaussDB automatic space reclamation; GET is test/diagnostics only.
+GRD_API int32_t GRD_KVSetDbShrinkEnable(GRD_DB *db, bool enable);
+
+GRD_API int32_t GRD_KVGetDbShrinkEnable(GRD_DB *db, bool *enable);
 #ifdef __cplusplus
 }
 #endif

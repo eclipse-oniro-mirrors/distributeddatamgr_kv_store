@@ -35,6 +35,15 @@ namespace OHOS::DistributedKv {
 using namespace OHOS::DistributedDataDfx;
 using namespace std::chrono;
 using namespace DATABASE_UTILS;
+
+namespace {
+ExecutorPool &GetShrinkExecutorPool()
+{
+    static ExecutorPool pool(1, 1, "KVDB_Shrink");
+    return pool;
+}
+} // namespace
+
 SingleStoreImpl::SingleStoreImpl(
     std::shared_ptr<DBStore> dbStore, const AppId &appId, const Options &options, const Convertor &cvt)
     : convertor_(cvt), dbStore_(std::move(dbStore))
@@ -48,6 +57,13 @@ SingleStoreImpl::SingleStoreImpl(
     isClientSync_ = options.isClientSync;
     syncObserver_ = std::make_shared<SyncObserver>();
     roleType_ = options.role;
+    // Accept by store type only. Do not probe the actual engine on the open path. If the
+    // background Pragma rejects the switch, NOT_SUPPORT/BUSY/TIMEOUT are logged as warnings;
+    // DB_ERROR (e.g. missing shrink symbols) is logged with DFX (see review E3).
+    shrinkAccepted_ = options.kvStoreType == KvStoreType::LOCAL_ONLY;
+    if (shrinkAccepted_) {
+        shrinkAccepted_ = !options.isPublic;
+    }
     dataType_ = options.dataType;
     encrypt_ = options.encrypt;
     securityLevel_ = options.securityLevel;
@@ -899,6 +915,80 @@ Status SingleStoreImpl::Rekey()
 
     ZLOGI("Rekey completed successfully for store:%{public}s", StoreUtil::Anonymous(storeId_).c_str());
     return SUCCESS;
+}
+
+Status SingleStoreImpl::SetShrinkEnable(bool enable)
+{
+    DdsTrace trace(std::string(LOG_TAG "::") + std::string(__FUNCTION__));
+    std::shared_lock<decltype(rwMutex_)> lock(rwMutex_);
+    if (dbStore_ == nullptr) {
+        ZLOGE("db:%{public}s already closed!", StoreUtil::Anonymous(storeId_).c_str());
+        return ALREADY_CLOSED;
+    }
+    if (!shrinkAccepted_) {
+        if (!enable) {
+            return SUCCESS;
+        }
+        ZLOGI("shrink is not supported for this store type, store:%{public}s",
+            StoreUtil::Anonymous(storeId_).c_str());
+        return NOT_SUPPORT;
+    }
+    std::lock_guard<std::mutex> submitLock(shrinkSubmitMutex_);
+    bool previousDesired = false;
+    uint32_t previousPending = 0;
+    shrinkManager_.GetState(previousDesired, previousPending);
+    if (shrinkManager_.SetDesired(enable)) {
+        auto self = shared_from_this();
+        auto taskId = GetShrinkExecutorPool().Execute([self, enable]() { self->RunShrink(enable); });
+        if (taskId == ExecutorPool::INVALID_TASK_ID) {
+            shrinkManager_.Rollback(previousDesired);
+            ZLOGE("submit shrink task failed, enable:%{public}d store:%{public}s", enable,
+                StoreUtil::Anonymous(storeId_).c_str());
+            return DB_ERROR;
+        }
+    }
+    ZLOGI("shrink switch accepted, enable:%{public}d store:%{public}s", enable,
+        StoreUtil::Anonymous(storeId_).c_str());
+    return SUCCESS;
+}
+
+void SingleStoreImpl::RunShrink(bool enable)
+{
+    std::shared_lock<decltype(rwMutex_)> lock(rwMutex_);
+    if (dbStore_ == nullptr) {
+        ZLOGD("shrink task skipped, db:%{public}s already closed", StoreUtil::Anonymous(storeId_).c_str());
+        shrinkManager_.Finish();
+        return;
+    }
+    if (!shrinkManager_.TryBegin(enable)) {
+        ZLOGD("shrink task superseded, enable:%{public}d store:%{public}s", enable,
+            StoreUtil::Anonymous(storeId_).c_str());
+        shrinkManager_.Finish();
+        return;
+    }
+    DistributedDB::ShrinkParam param;
+    param.operation = DistributedDB::ShrinkOperation::SET;
+    param.enable = enable;
+    DistributedDB::PragmaData data = &param;
+    auto status = dbStore_->Pragma(DistributedDB::SHRINK, data);
+    shrinkManager_.Finish();
+    if (status == DistributedDB::DBStatus::OK) {
+        ZLOGI("shrink switch applied, enable:%{public}d store:%{public}s", enable,
+            StoreUtil::Anonymous(storeId_).c_str());
+    } else if (status == DistributedDB::DBStatus::BUSY || status == DistributedDB::DBStatus::TIME_OUT ||
+        status == DistributedDB::DBStatus::NOT_SUPPORT) {
+        ZLOGW("shrink switch not applied, enable:%{public}d status:%{public}d store:%{public}s", enable,
+            static_cast<int32_t>(status), StoreUtil::Anonymous(storeId_).c_str());
+    } else {
+        ZLOGE("shrink switch failed, enable:%{public}d status:%{public}d store:%{public}s", enable,
+            static_cast<int32_t>(status), StoreUtil::Anonymous(storeId_).c_str());
+        ReportDBFaultEvent(StoreUtil::ConvertStatus(status), "RunShrink");
+    }
+}
+
+void SingleStoreImpl::GetShrinkStateForTest(bool &desiredEnabled, uint32_t &pendingTasks) const
+{
+    shrinkManager_.GetState(desiredEnabled, pendingTasks);
 }
 
 std::shared_ptr<ObserverBridge> SingleStoreImpl::PutIn(uint32_t &realType, std::shared_ptr<Observer> observer)

@@ -129,3 +129,21 @@ GRD_API int32_t GRD_KVBatchDestroy(GRD_KVBatchT *batch)
     }
     return GRD_KVApiInfo->KVBatchDestroyApi(batch);
 }
+
+GRD_API int32_t GRD_KVSetDbShrinkEnable(GRD_DB *db, bool enable)
+{
+    if (GRD_KVApiInfo->KVSetDbShrinkEnableApi == nullptr) {
+        GLOGD("Fail to dlsym RD api symbol of GRD_KVSetDbShrinkEnable");
+        return GRD_INNER_ERR;
+    }
+    return GRD_KVApiInfo->KVSetDbShrinkEnableApi(db, enable);
+}
+
+GRD_API int32_t GRD_KVGetDbShrinkEnable(GRD_DB *db, bool *enable)
+{
+    if (GRD_KVApiInfo->KVGetDbShrinkEnableApi == nullptr) {
+        GLOGD("Fail to dlsym RD api symbol of GRD_KVGetDbShrinkEnable");
+        return GRD_INNER_ERR;
+    }
+    return GRD_KVApiInfo->KVGetDbShrinkEnableApi(db, enable);
+}
