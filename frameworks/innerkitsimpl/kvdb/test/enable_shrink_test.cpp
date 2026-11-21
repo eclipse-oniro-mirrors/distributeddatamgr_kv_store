@@ -104,9 +104,9 @@ constexpr int64_t CONCURRENT_P95_FLOOR_MICROS = 1000 * 1000;
 constexpr int64_t READER_YIELD_MS = 1;
 
 constexpr int32_t PERF_WARMUP_ROUNDS = 1;
-// Six measured rounds keep the ABBA order balanced (P,E,E,P,P,E) and give the
-// median enough samples to reject a single noisy round.
-constexpr int32_t PERF_ROUNDS = 6;
+// Ten measured rounds keep the ABBA order balanced (P,E,E,P,P,E,E,P,P,E) and
+// give the median enough samples to tolerate up to four noisy rounds.
+constexpr int32_t PERF_ROUNDS = 10;
 constexpr int32_t PERF_ORDER_CYCLE = 4;
 constexpr int32_t PERF_DELETE_SAMPLES = 200;
 // A 32-key batch is a real "批量编辑" workload and raises the 10% budget from
@@ -187,6 +187,20 @@ int64_t Median(std::vector<int64_t> samples)
     if (samples.size() % EVEN_SAMPLE_DIVISOR == 0) {
         return (samples[middle - 1] + samples[middle]) /
             static_cast<int64_t>(EVEN_SAMPLE_DIVISOR);
+    }
+    return samples[middle];
+}
+
+double MedianDouble(std::vector<double> samples)
+{
+    if (samples.empty()) {
+        return 0.0;
+    }
+    std::sort(samples.begin(), samples.end());
+    size_t middle = samples.size() / EVEN_SAMPLE_DIVISOR;
+    if (samples.size() % EVEN_SAMPLE_DIVISOR == 0) {
+        return (samples[middle - 1] + samples[middle]) /
+            static_cast<double>(EVEN_SAMPLE_DIVISOR);
     }
     return samples[middle];
 }
@@ -738,6 +752,13 @@ struct PerfSamples {
     int64_t reclaimDropDuringMeasurementPercent = 0;
 };
 
+size_t PerfCommonRounds(const PerfSamples &perf)
+{
+    return std::min(std::min(perf.plainDeleteP95s.size(), perf.enabledDeleteP95s.size()),
+        std::min(std::min(perf.plainBatchP95s.size(), perf.enabledBatchP95s.size()),
+        std::min(perf.plainWriteBytesPerSec.size(), perf.enabledWriteBytesPerSec.size())));
+}
+
 int64_t BytesPerSecond(int64_t bytes, int64_t micros)
 {
     return micros > 0 ? bytes * MICROS_PER_SECOND / micros : 0;
@@ -1027,6 +1048,9 @@ bool RunPerfRound(const PerfContext &context, int32_t round, bool plainFirst, bo
     std::vector<Entry> deleteEntries = MakePerfRoundEntries(round, batchEntries);
     std::vector<Entry> allEntries = deleteEntries;
     allEntries.insert(allEntries.end(), batchEntries.begin(), batchEntries.end());
+    if (!WaitReclaimQuiescent(context.enabledId, PERF_QUIESCE_TIMEOUT_MS) && record) {
+        perf.quiescenceOk = false;
+    }
     if (!RunPerfWritePhase(context, allEntries, perf, plainFirst, record)) {
         return false;
     }
@@ -1061,17 +1085,24 @@ struct PerfMedians {
     int64_t enabledBatchP95 = 0;
     int64_t plainWrite = 0;
     int64_t enabledWrite = 0;
-    int64_t deleteDegradePercent = 0;
-    int64_t batchDegradePercent = 0;
-    int64_t writeDegradePercent = 0;
+    double deleteDegradePercent = 0.0;
+    double batchDegradePercent = 0.0;
+    double writeDegradePercent = 0.0;
     int64_t reclaimDropPercent = 0;
     int64_t deleteAllowed = 0;
     int64_t batchAllowed = 0;
 };
 
-int64_t DegradePercent(int64_t plainValue, int64_t enabledValue)
+double PerfDeltaPercent(int64_t plainValue, int64_t enabledValue)
 {
-    return plainValue > 0 ? (enabledValue - plainValue) * PERCENT_SCALE / plainValue : 0;
+    return plainValue > 0 ? static_cast<double>(enabledValue - plainValue) * PERCENT_SCALE /
+        static_cast<double>(plainValue) : 0.0;
+}
+
+double PerfWriteDegradePercent(int64_t plainValue, int64_t enabledValue)
+{
+    return plainValue > 0 ? static_cast<double>(plainValue - enabledValue) * PERCENT_SCALE /
+        static_cast<double>(plainValue) : 0.0;
 }
 
 PerfMedians ComputePerfMedians(const PerfSamples &perf, const DiskUsage &peak, const DiskUsage &finalUsage)
@@ -1083,10 +1114,23 @@ PerfMedians ComputePerfMedians(const PerfSamples &perf, const DiskUsage &peak, c
     medians.enabledBatchP95 = Median(perf.enabledBatchP95s);
     medians.plainWrite = Median(perf.plainWriteBytesPerSec);
     medians.enabledWrite = Median(perf.enabledWriteBytesPerSec);
-    medians.deleteDegradePercent = DegradePercent(medians.plainDeleteP95, medians.enabledDeleteP95);
-    medians.batchDegradePercent = DegradePercent(medians.plainBatchP95, medians.enabledBatchP95);
-    medians.writeDegradePercent = medians.plainWrite > 0 ?
-        (medians.plainWrite - medians.enabledWrite) * PERCENT_SCALE / medians.plainWrite : 0;
+    size_t rounds = PerfCommonRounds(perf);
+    std::vector<double> deleteDeltas;
+    std::vector<double> batchDeltas;
+    std::vector<double> writeDeltas;
+    for (size_t index = 0; index < rounds; ++index) {
+        deleteDeltas.push_back(PerfDeltaPercent(perf.plainDeleteP95s[index],
+            perf.enabledDeleteP95s[index]));
+        batchDeltas.push_back(PerfDeltaPercent(perf.plainBatchP95s[index],
+            perf.enabledBatchP95s[index]));
+        writeDeltas.push_back(PerfWriteDegradePercent(perf.plainWriteBytesPerSec[index],
+            perf.enabledWriteBytesPerSec[index]));
+    }
+    // AC-1.7 compares paired plain/enabled samples per round; the median is taken
+    // over the per-round degradation rates, not over two independently aggregated values.
+    medians.deleteDegradePercent = MedianDouble(deleteDeltas);
+    medians.batchDegradePercent = MedianDouble(batchDeltas);
+    medians.writeDegradePercent = MedianDouble(writeDeltas);
     medians.reclaimDropPercent = DropPercent(peak.dbBlockBytes, finalUsage.dbBlockBytes);
     // AC-1.7 strict gate: the allowed degradation is exactly 10% of the plain baseline.
     medians.deleteAllowed = medians.plainDeleteP95 * PERF_DEGRADE_LIMIT_PERCENT / PERCENT_SCALE;
@@ -1145,21 +1189,22 @@ void ExpectPerfResults(const PerfMedians &medians, const DiskUsage &peak, const 
     EXPECT_GE(medians.reclaimDropPercent, PERF_RECLAIM_MIN_DROP_PERCENT) <<
         "the enabled store did not show engine reclamation during the measured workload (peak=" <<
         peak.dbBlockBytes << ", final=" << finalUsage.dbBlockBytes << ")";
-    EXPECT_LE(medians.enabledDeleteP95 - medians.plainDeleteP95, medians.deleteAllowed) <<
-        "Delete P95 degraded by " << medians.deleteDegradePercent << "% (" << medians.plainDeleteP95 <<
-        " -> " << medians.enabledDeleteP95 << " us, allowed +" << medians.deleteAllowed << " us)";
-    EXPECT_LE(medians.enabledBatchP95 - medians.plainBatchP95, medians.batchAllowed) <<
-        "DeleteBatch P95 degraded by " << medians.batchDegradePercent << "% (" << medians.plainBatchP95 <<
-        " -> " << medians.enabledBatchP95 << " us, allowed +" << medians.batchAllowed << " us)";
-    EXPECT_GE(medians.enabledWrite, medians.plainWrite * (PERCENT_SCALE - PERF_DEGRADE_LIMIT_PERCENT) /
-        PERCENT_SCALE) << "PutBatch throughput degraded by " << medians.writeDegradePercent << "% (" <<
-        medians.plainWrite << " -> " << medians.enabledWrite << " bytes/sec)";
-}
-
-double PerfDeltaPercent(int64_t plainValue, int64_t enabledValue)
-{
-    return plainValue > 0 ? static_cast<double>(enabledValue - plainValue) * PERCENT_SCALE /
-        static_cast<double>(plainValue) : 0.0;
+    EXPECT_LE(medians.deleteDegradePercent, static_cast<double>(PERF_DEGRADE_LIMIT_PERCENT)) <<
+        "Delete P95 paired median degraded by " << std::fixed << std::setprecision(PERCENT_DECIMALS) <<
+        medians.deleteDegradePercent << "% (plain median=" << medians.plainDeleteP95 <<
+        " us, enabled median=" << medians.enabledDeleteP95 << " us, allowed=" <<
+        PERF_DEGRADE_LIMIT_PERCENT << "%)" << std::defaultfloat;
+    EXPECT_LE(medians.batchDegradePercent, static_cast<double>(PERF_DEGRADE_LIMIT_PERCENT)) <<
+        "DeleteBatch P95 paired median degraded by " << std::fixed <<
+        std::setprecision(PERCENT_DECIMALS) << medians.batchDegradePercent <<
+        "% (plain median=" << medians.plainBatchP95 << " us, enabled median=" <<
+        medians.enabledBatchP95 << " us, allowed=" << PERF_DEGRADE_LIMIT_PERCENT << "%)" <<
+        std::defaultfloat;
+    EXPECT_LE(medians.writeDegradePercent, static_cast<double>(PERF_DEGRADE_LIMIT_PERCENT)) <<
+        "PutBatch throughput paired median degraded by " << std::fixed <<
+        std::setprecision(PERCENT_DECIMALS) << medians.writeDegradePercent << "% (plain median=" <<
+        medians.plainWrite << " bytes/sec, enabled median=" << medians.enabledWrite <<
+        " bytes/sec, allowed=" << PERF_DEGRADE_LIMIT_PERCENT << "%)" << std::defaultfloat;
 }
 
 void PrintPerfConfig()
@@ -1174,9 +1219,7 @@ void PrintPerfConfig()
 
 void PrintPerfRoundEvidence(const PerfSamples &perf)
 {
-    size_t rounds = std::min(std::min(perf.plainDeleteP95s.size(), perf.enabledDeleteP95s.size()),
-        std::min(std::min(perf.plainBatchP95s.size(), perf.enabledBatchP95s.size()),
-        std::min(perf.plainWriteBytesPerSec.size(), perf.enabledWriteBytesPerSec.size())));
+    size_t rounds = PerfCommonRounds(perf);
     for (size_t index = 0; index < rounds; ++index) {
         int64_t plainDelete = perf.plainDeleteP95s[index];
         int64_t enabledDelete = perf.enabledDeleteP95s[index];
@@ -1190,8 +1233,8 @@ void PrintPerfRoundEvidence(const PerfSamples &perf)
             std::setprecision(PERCENT_DECIMALS) << PerfDeltaPercent(plainDelete, enabledDelete) <<
             "% batch_us plain=" << plainBatch << " enabled=" << enabledBatch << " delta=" <<
             PerfDeltaPercent(plainBatch, enabledBatch) << "% write_bps plain=" << plainWrite <<
-            " enabled=" << enabledWrite << " delta=" <<
-            PerfDeltaPercent(plainWrite, enabledWrite) << "%" << std::defaultfloat << std::endl;
+            " enabled=" << enabledWrite << " degrade=" <<
+            PerfWriteDegradePercent(plainWrite, enabledWrite) << "%" << std::defaultfloat << std::endl;
         bool plainObserved = false;
         int64_t plainDrop = 0;
         bool enabledObserved = false;
@@ -1212,26 +1255,27 @@ void PrintPerfRoundEvidence(const PerfSamples &perf)
 
 void PrintPerfMedianSummary(const PerfMedians &medians)
 {
-    double writeDelta = medians.plainWrite > 0 ?
-        static_cast<double>(medians.plainWrite - medians.enabledWrite) * PERCENT_SCALE /
-        static_cast<double>(medians.plainWrite) : 0.0;
+    double deleteRatio = PerfDeltaPercent(medians.plainDeleteP95, medians.enabledDeleteP95);
+    double batchRatio = PerfDeltaPercent(medians.plainBatchP95, medians.enabledBatchP95);
+    double writeRatio = PerfWriteDegradePercent(medians.plainWrite, medians.enabledWrite);
     std::cout << "[AC-1.7][perf] median delete_p95_us plain=" << medians.plainDeleteP95 <<
         " enabled=" << medians.enabledDeleteP95 << " diff=" <<
         medians.enabledDeleteP95 - medians.plainDeleteP95 << " allowed=" << medians.deleteAllowed <<
         " degrade=" << std::fixed << std::setprecision(PERCENT_DECIMALS) <<
-        PerfDeltaPercent(medians.plainDeleteP95, medians.enabledDeleteP95) << "%" <<
+        medians.deleteDegradePercent << "% ratio_of_medians=" << deleteRatio << "%" <<
         std::defaultfloat << std::endl;
     std::cout << "[AC-1.7][perf] median delete_batch_p95_us plain=" << medians.plainBatchP95 <<
         " enabled=" << medians.enabledBatchP95 << " diff=" <<
         medians.enabledBatchP95 - medians.plainBatchP95 << " allowed=" << medians.batchAllowed <<
         " degrade=" << std::fixed << std::setprecision(PERCENT_DECIMALS) <<
-        PerfDeltaPercent(medians.plainBatchP95, medians.enabledBatchP95) << "%" <<
+        medians.batchDegradePercent << "% ratio_of_medians=" << batchRatio << "%" <<
         std::defaultfloat << std::endl;
     std::cout << "[AC-1.7][perf] median write_throughput_bps plain=" << medians.plainWrite <<
         " enabled=" << medians.enabledWrite << " plain_mib=" <<
         static_cast<double>(medians.plainWrite) / BYTES_PER_MIB << " enabled_mib=" <<
         static_cast<double>(medians.enabledWrite) / BYTES_PER_MIB << " degrade=" << std::fixed <<
-        std::setprecision(PERCENT_DECIMALS) << writeDelta << "%" << std::defaultfloat << std::endl;
+        std::setprecision(PERCENT_DECIMALS) << medians.writeDegradePercent <<
+        "% ratio_of_medians=" << writeRatio << "%" << std::defaultfloat << std::endl;
 }
 
 void PrintPerfReclaimSummary(const PerfScenarioResult &result)
