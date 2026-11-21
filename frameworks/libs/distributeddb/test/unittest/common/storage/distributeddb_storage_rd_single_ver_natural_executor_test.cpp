@@ -739,6 +739,27 @@ HWTEST_F(DistributedDBStorageRdSingleVerNaturalExecutorTest, PragmaShrinkSetGet0
     apiInfo->KVGetDbShrinkEnableApi = originalGet;
 }
 
+HWTEST_F(DistributedDBStorageRdSingleVerNaturalExecutorTest, PragmaShrinkNullApi, TestSize.Level1)
+{
+    DocumentDB::GRD_APIInfo *apiInfo = DocumentDB::GetApiInfo();
+    auto originalSet = apiInfo->KVSetDbShrinkEnableApi;
+    auto originalGet = apiInfo->KVGetDbShrinkEnableApi;
+    ShrinkParam param;
+    param.operation = ShrinkOperation::SET;
+    param.enable = true;
+
+    apiInfo->KVSetDbShrinkEnableApi = nullptr;
+    EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, &param), -E_INTERNAL_ERROR);
+    apiInfo->KVSetDbShrinkEnableApi = originalSet;
+
+    apiInfo->KVGetDbShrinkEnableApi = nullptr;
+    param.operation = ShrinkOperation::GET;
+    param.enable = true;
+    EXPECT_EQ(g_connection->Pragma(PRAGMA_SHRINK, &param), -E_INTERNAL_ERROR);
+    EXPECT_TRUE(param.enable);
+    apiInfo->KVGetDbShrinkEnableApi = originalGet;
+}
+
 HWTEST_F(DistributedDBStorageRdSingleVerNaturalExecutorTest, PragmaShrinkNullExecutor, TestSize.Level1)
 {
     RdSingleVerNaturalStoreConnection connection(nullptr);

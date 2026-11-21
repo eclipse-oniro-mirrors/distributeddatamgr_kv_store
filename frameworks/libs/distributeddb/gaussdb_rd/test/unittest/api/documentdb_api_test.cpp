@@ -915,4 +915,24 @@ HWTEST_F(DocumentDBApiTest, GetDbShrinkEnableTest001, TestSize.Level0)
     apiInfo->KVGetDbShrinkEnableApi = originalGet;
 }
 
+HWTEST_F(DocumentDBApiTest, SetDbShrinkEnableNullApiTest, TestSize.Level0)
+{
+    GRD_APIInfo *apiInfo = GetApiInfo();
+    auto originalSet = apiInfo->KVSetDbShrinkEnableApi;
+    apiInfo->KVSetDbShrinkEnableApi = nullptr;
+    EXPECT_EQ(GRD_KVSetDbShrinkEnable(nullptr, true), GRD_INNER_ERR);
+    apiInfo->KVSetDbShrinkEnableApi = originalSet;
+}
+
+HWTEST_F(DocumentDBApiTest, GetDbShrinkEnableNullApiTest, TestSize.Level0)
+{
+    GRD_APIInfo *apiInfo = GetApiInfo();
+    auto originalGet = apiInfo->KVGetDbShrinkEnableApi;
+    apiInfo->KVGetDbShrinkEnableApi = nullptr;
+    bool actual = false;
+    EXPECT_EQ(GRD_KVGetDbShrinkEnable(nullptr, &actual), GRD_INNER_ERR);
+    EXPECT_FALSE(actual);
+    apiInfo->KVGetDbShrinkEnableApi = originalGet;
+}
+
 } // namespace

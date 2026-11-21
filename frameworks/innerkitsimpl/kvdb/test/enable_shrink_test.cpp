@@ -1646,9 +1646,9 @@ public:
     void TearDown(void);
 
     std::shared_ptr<SingleKvStore> OpenStore(const std::string &storeId, KvStoreType type, bool encrypt = false,
-        Status *openStatus = nullptr);
+        Status *openStatus = nullptr, bool isPublic = false);
     std::shared_ptr<SingleKvStore> CreateStore(const std::string &storeId, KvStoreType type, bool encrypt = false,
-        Status *openStatus = nullptr);
+        Status *openStatus = nullptr, bool isPublic = false);
     void CloseStore(const std::string &storeId, std::shared_ptr<SingleKvStore> &store);
     static std::shared_ptr<SingleStoreImpl> AsImpl(const std::shared_ptr<SingleKvStore> &store);
 };
@@ -1668,7 +1668,7 @@ void EnableShrinkTest::SetUp(void) {}
 void EnableShrinkTest::TearDown(void) {}
 
 std::shared_ptr<SingleKvStore> EnableShrinkTest::OpenStore(const std::string &storeId, KvStoreType type,
-    bool encrypt, Status *openStatus)
+    bool encrypt, Status *openStatus, bool isPublic)
 {
     Options options = {};
     options.kvStoreType = type;
@@ -1676,6 +1676,7 @@ std::shared_ptr<SingleKvStore> EnableShrinkTest::OpenStore(const std::string &st
     options.area = EL1;
     options.backup = true;
     options.encrypt = encrypt;
+    options.isPublic = isPublic;
     options.baseDir = BASE_DIR;
     AppId appId = { APP_ID };
     StoreId id = { storeId };
@@ -1688,12 +1689,12 @@ std::shared_ptr<SingleKvStore> EnableShrinkTest::OpenStore(const std::string &st
 }
 
 std::shared_ptr<SingleKvStore> EnableShrinkTest::CreateStore(const std::string &storeId, KvStoreType type,
-    bool encrypt, Status *openStatus)
+    bool encrypt, Status *openStatus, bool isPublic)
 {
     AppId appId = { APP_ID };
     StoreId id = { storeId };
     (void)StoreManager::GetInstance().Delete(appId, id, BASE_DIR);
-    return OpenStore(storeId, type, encrypt, openStatus);
+    return OpenStore(storeId, type, encrypt, openStatus, isPublic);
 }
 
 void EnableShrinkTest::CloseStore(const std::string &storeId, std::shared_ptr<SingleKvStore> &store)
@@ -2104,5 +2105,65 @@ HWTEST_F(EnableShrinkTest, RunShrinkAfterClose, TestSize.Level1)
     EXPECT_TRUE(desired);
     EXPECT_EQ(pending, 0u);
     CloseStore(storeId, store);
+}
+
+/*
+ * Branch-coverage guard: an unsupported store (LOCAL_ONLY but public) exercises both outcomes of
+ * the inner "!enable" check and the unsupported outcome of "!shrinkAccepted_".
+ */
+HWTEST_F(EnableShrinkTest, SetShrinkEnableUnsupportedStoreBranches, TestSize.Level1)
+{
+    const std::string storeId = "EnableShrinkUnsupportedBranches";
+    auto store = CreateStore(storeId, KvStoreType::LOCAL_ONLY, false, nullptr, true);
+    ASSERT_NE(store, nullptr);
+    EXPECT_EQ(store->SetShrinkEnable(true), NOT_SUPPORT);
+    EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
+    auto impl = AsImpl(store);
+    ASSERT_NE(impl, nullptr);
+    bool desired = true;
+    uint32_t pending = 1;
+    impl->GetShrinkStateForTest(desired, pending);
+    EXPECT_FALSE(desired);
+    EXPECT_EQ(pending, 0u);
+    CloseStore(storeId, store);
+}
+
+/*
+ * Branch-coverage guard: a duplicate switch request (same value, one task already pending) must not
+ * queue a second task, which is the dedupe outcome of SetDesired().
+ */
+HWTEST_F(EnableShrinkTest, SetShrinkEnableDedupeWhilePending, TestSize.Level1)
+{
+    const std::string storeId = "EnableShrinkDedupePending";
+    auto store = CreateStore(storeId, KvStoreType::LOCAL_ONLY);
+    ASSERT_NE(store, nullptr);
+    auto impl = AsImpl(store);
+    ASSERT_NE(impl, nullptr);
+    ASSERT_TRUE(impl->shrinkManager_.SetDesired(true));
+    EXPECT_EQ(store->SetShrinkEnable(true), SUCCESS);
+    bool desired = false;
+    uint32_t pending = 0;
+    impl->GetShrinkStateForTest(desired, pending);
+    EXPECT_TRUE(desired);
+    EXPECT_EQ(pending, 1u);
+    impl->shrinkManager_.Finish();
+    CloseStore(storeId, store);
+}
+
+/*
+ * Branch-coverage guard: a closed store is rejected before the support check runs.
+ */
+HWTEST_F(EnableShrinkTest, SetShrinkEnableClosedStoreBranches, TestSize.Level1)
+{
+    const std::string storeId = "EnableShrinkClosedBranches";
+    auto store = CreateStore(storeId, KvStoreType::LOCAL_ONLY);
+    ASSERT_NE(store, nullptr);
+    AppId appId = { APP_ID };
+    StoreId id = { storeId };
+    ASSERT_EQ(StoreManager::GetInstance().CloseKVStore(appId, id), SUCCESS);
+    EXPECT_EQ(store->SetShrinkEnable(true), ALREADY_CLOSED);
+    EXPECT_EQ(store->SetShrinkEnable(false), ALREADY_CLOSED);
+    store = nullptr;
+    (void)StoreManager::GetInstance().Delete(appId, id, BASE_DIR);
 }
 }
