@@ -193,20 +193,6 @@ int64_t Median(std::vector<int64_t> samples)
     return samples[middle];
 }
 
-double MedianDouble(std::vector<double> samples)
-{
-    if (samples.empty()) {
-        return 0.0;
-    }
-    std::sort(samples.begin(), samples.end());
-    size_t middle = samples.size() / EVEN_SAMPLE_DIVISOR;
-    if (samples.size() % EVEN_SAMPLE_DIVISOR == 0) {
-        return (samples[middle - 1] + samples[middle]) /
-            static_cast<double>(EVEN_SAMPLE_DIVISOR);
-    }
-    return samples[middle];
-}
-
 bool EndsWithDbSuffix(const std::string &name)
 {
     constexpr const char *dbSuffix = ".db";
@@ -746,13 +732,6 @@ struct PerfSamples {
     bool reclaimObservedDuringMeasurement = false;
 };
 
-size_t PerfCommonRounds(const PerfSamples &perf)
-{
-    return std::min(std::min(perf.plainDeleteP95s.size(), perf.enabledDeleteP95s.size()),
-        std::min(std::min(perf.plainBatchP95s.size(), perf.enabledBatchP95s.size()),
-        std::min(perf.plainWriteBytesPerSec.size(), perf.enabledWriteBytesPerSec.size())));
-}
-
 int64_t BytesPerSecond(int64_t bytes, int64_t micros)
 {
     return micros > 0 ? bytes * MICROS_PER_SECOND / micros : 0;
@@ -1104,23 +1083,11 @@ PerfMedians ComputePerfMedians(const PerfSamples &perf, const DiskUsage &peak, c
     medians.enabledBatchP95 = Median(perf.enabledBatchP95s);
     medians.plainWrite = Median(perf.plainWriteBytesPerSec);
     medians.enabledWrite = Median(perf.enabledWriteBytesPerSec);
-    size_t rounds = PerfCommonRounds(perf);
-    std::vector<double> deleteDeltas;
-    std::vector<double> batchDeltas;
-    std::vector<double> writeDeltas;
-    for (size_t index = 0; index < rounds; ++index) {
-        deleteDeltas.push_back(PerfDeltaPercent(perf.plainDeleteP95s[index],
-            perf.enabledDeleteP95s[index]));
-        batchDeltas.push_back(PerfDeltaPercent(perf.plainBatchP95s[index],
-            perf.enabledBatchP95s[index]));
-        writeDeltas.push_back(PerfWriteDegradePercent(perf.plainWriteBytesPerSec[index],
-            perf.enabledWriteBytesPerSec[index]));
-    }
-    // AC-1.7 compares paired plain/enabled samples per round; the median is taken
-    // over the per-round degradation rates, not over two independently aggregated values.
-    medians.deleteDegradePercent = MedianDouble(deleteDeltas);
-    medians.batchDegradePercent = MedianDouble(batchDeltas);
-    medians.writeDegradePercent = MedianDouble(writeDeltas);
+    // AC-1.7: take the median of each group's per-round values first, then compute
+    // degradation against the plain median (spec: 多轮运行取中位数后计算劣化率).
+    medians.deleteDegradePercent = PerfDeltaPercent(medians.plainDeleteP95, medians.enabledDeleteP95);
+    medians.batchDegradePercent = PerfDeltaPercent(medians.plainBatchP95, medians.enabledBatchP95);
+    medians.writeDegradePercent = PerfWriteDegradePercent(medians.plainWrite, medians.enabledWrite);
     medians.reclaimDropPercent = DropPercent(peak.dbBlockBytes, finalUsage.dbBlockBytes);
     return medians;
 }
