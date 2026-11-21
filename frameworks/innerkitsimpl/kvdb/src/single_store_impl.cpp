@@ -60,7 +60,10 @@ SingleStoreImpl::SingleStoreImpl(
     // Accept by store type only. Do not probe the actual engine on the open path. If the
     // background Pragma rejects the switch, NOT_SUPPORT/BUSY/TIMEOUT are logged as warnings;
     // DB_ERROR (e.g. missing shrink symbols) is logged with DFX (see review E3).
-    shrinkAccepted_ = (options.kvStoreType == KvStoreType::LOCAL_ONLY) && !options.isPublic;
+    shrinkAccepted_ = options.kvStoreType == KvStoreType::LOCAL_ONLY;
+    if (shrinkAccepted_) {
+        shrinkAccepted_ = !options.isPublic;
+    }
     dataType_ = options.dataType;
     encrypt_ = options.encrypt;
     securityLevel_ = options.securityLevel;

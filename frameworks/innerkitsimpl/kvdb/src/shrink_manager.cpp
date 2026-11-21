@@ -19,10 +19,14 @@ namespace OHOS::DistributedKv {
 bool ShrinkManager::SetDesired(bool enable)
 {
     std::lock_guard<std::mutex> lock(stateMutex_);
-    if (desiredEnabled_ == enable && pendingTasks_ > 0) {
+    if (desiredEnabled_ != enable) {
+        desiredEnabled_ = enable;
+        ++pendingTasks_;
+        return true;
+    }
+    if (pendingTasks_ > 0) {
         return false;
     }
-    desiredEnabled_ = enable;
     ++pendingTasks_;
     return true;
 }
