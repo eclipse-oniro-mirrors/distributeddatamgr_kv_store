@@ -411,7 +411,7 @@ RelationalSchemaObject SQLiteRelationalStore::GetSchemaObj() const
 }
 
 void SQLiteRelationalStore::TrackerIntegrityRepair(const TrackerSchema &trackerSchema,
-    const TableInfo &tableInfo, bool isNoTableInSchema)
+    const TableInfo &tableInfo, bool isNoTableInSchema) const
 {
     int errCode = E_OK;
     auto *handle = GetHandle(false, errCode);
@@ -447,7 +447,7 @@ void SQLiteRelationalStore::TrackerIntegrityRepair(const TrackerSchema &trackerS
     TrackerRepairImpl(trackerTable, obj);
 }
 
-void SQLiteRelationalStore::TrackerRepairImpl(TrackerTable &trackerTable, const RelationalSchemaObject &obj)
+void SQLiteRelationalStore::TrackerRepairImpl(TrackerTable &trackerTable, const RelationalSchemaObject &obj) const
 {
     trackerTable.Repair([this, &obj] (const TrackerTable::RepairInfo &repairInfo, const std::string &tableName,
         const std::set<std::string> &extendColNames) {
@@ -467,7 +467,7 @@ void SQLiteRelationalStore::TrackerRepairImpl(TrackerTable &trackerTable, const 
             LOGW("[TrackerIntegrityRepair] recover cursor to meta errCode=%d", cursorErr);
         }
         for (const auto &sql : repairInfo.createTriggerSqls) {
-            int errCode = SQLiteUtils::ExecuteRawSQL(db, sql);
+            errCode = SQLiteUtils::ExecuteRawSQL(db, sql);
             if (errCode != E_OK) {
                 LOGW("[%s [%zu]] Failed to recreate trigger, errCode=%d",
                     DBCommon::StringMiddleMasking(tableName).c_str(), tableName.size(), errCode);
