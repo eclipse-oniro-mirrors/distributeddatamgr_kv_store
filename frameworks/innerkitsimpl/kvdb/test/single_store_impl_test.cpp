@@ -2866,4 +2866,16 @@ HWTEST_F(SingleStoreImplTest, RestoreWithDumpStackOnly_AclEnabled_001, TestSize.
     ASSERT_EQ(access(dbFile.c_str(), F_OK), 0);
     EXPECT_TRUE(HasServiceAcl(dbFile));
 }
+
+HWTEST_F(SingleStoreImplTest, DumpStackOnFileDeletion_BranchMatrix_001, TestSize.Level0)
+{
+    auto syncableStore = CreateStoreImpl(false, false, true, false, "DumpStackMatrixSyncable");
+    ASSERT_NE(syncableStore, nullptr);
+    auto backupStore = CreateStoreImpl(false, false, false, true, "DumpStackMatrixBackup");
+    ASSERT_NE(backupStore, nullptr);
+    auto dumpStackStore = CreateStoreImpl(false, true, false, false, "DumpStackMatrixDumpStack");
+    ASSERT_NE(dumpStackStore, nullptr);
+    auto plainStore = CreateStoreImpl(false, false, false, false, "DumpStackMatrixPlain");
+    ASSERT_NE(plainStore, nullptr);
+}
 } // namespace OHOS::Test

@@ -274,7 +274,7 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, GetOrOpenStore_CacheHitNoClear_001, Test
     (void)DeleteStore(storeIdName);
 }
 
-HWTEST_F(KvDumpStackOnFileDeletionTest, OpenStore_Syncable_ClearPath_001, TestSize.Level1)
+HWTEST_F(KvDumpStackOnFileDeletionTest, OpenStore_Syncable_ClearPath_001, TestSize.Level0)
 {
     std::string storeIdName = "OpenSyncableStore";
     Status status = ERROR;
@@ -286,7 +286,7 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, OpenStore_Syncable_ClearPath_001, TestSi
     (void)DeleteStore(storeIdName);
 }
 
-HWTEST_F(KvDumpStackOnFileDeletionTest, OpenStore_Backup_ClearPath_001, TestSize.Level1)
+HWTEST_F(KvDumpStackOnFileDeletionTest, OpenStore_Backup_ClearPath_001, TestSize.Level0)
 {
     std::string storeIdName = "OpenBackupStore";
     Status status = ERROR;
@@ -374,7 +374,7 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_IoctlFailKeepsResult_001, TestSi
     (void)DeleteStore(storeIdName);
 }
 
-HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_Syncable_ClearBeforeImport_001, TestSize.Level1)
+HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_Syncable_ClearBeforeImport_001, TestSize.Level0)
 {
     std::string storeIdName = "RestoreSyncableStore";
     Status status = ERROR;
@@ -393,7 +393,7 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_Syncable_ClearBeforeImport_001, 
     (void)DeleteStore(storeIdName);
 }
 
-HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_Backup_ClearBeforeImport_001, TestSize.Level1)
+HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_Backup_ClearBeforeImport_001, TestSize.Level0)
 {
     std::string storeIdName = "RestoreBackupStore";
     Status status = ERROR;
@@ -412,7 +412,7 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_Backup_ClearBeforeImport_001, Te
     (void)DeleteStore(storeIdName);
 }
 
-HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_FlagFalse_ClearBeforeImport_001, TestSize.Level1)
+HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_FlagFalse_ClearBeforeImport_001, TestSize.Level0)
 {
     std::string storeIdName = "RestoreFlagFalseStore";
     Status status = ERROR;
