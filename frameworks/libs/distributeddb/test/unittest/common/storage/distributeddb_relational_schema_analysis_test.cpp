@@ -252,5 +252,102 @@ HWTEST_F(DistributedDBRelationalSchemaAnalysisTest, SetDistributedSchema001, Tes
         }
     }
 }
+
+/**
+  * @tc.name: MergeTrackerSchema001
+  * @tc.desc: Test RelationalSchemaObject::MergeTrackerSchema inserts the schema (insert branch)
+  *           when trackerColNames is non-empty, and overwrites the previous entry on re-merge.
+  * @tc.type: FUNC
+  * @tc.require:
+  * @tc.author: zqq
+  */
+HWTEST_F(DistributedDBRelationalSchemaAnalysisTest, MergeTrackerSchema001, TestSize.Level0)
+{
+    /**
+     * @tc.steps: step1. Merge a tracker schema with non-empty trackerColNames.
+     * @tc.expected: step1. Table is inserted into trackerTables_ and is non-empty.
+     */
+    RelationalSchemaObject schema;
+    TrackerSchema trackerSchema;
+    trackerSchema.tableName = "merge_table_1";
+    trackerSchema.trackerColNames = {"col1", "col2"};
+    trackerSchema.isTrackAction = false;
+    schema.MergeTrackerSchema(trackerSchema);
+    EXPECT_EQ(schema.GetTrackerTables().count("merge_table_1"), 1u);
+    EXPECT_FALSE(schema.GetTrackerTable("merge_table_1").IsEmpty());
+    EXPECT_EQ(schema.GetTrackerTable("merge_table_1").GetTrackerColNames().count("col1"), 1u);
+    EXPECT_EQ(schema.GetTrackerTable("merge_table_1").GetTrackerColNames().count("col2"), 1u);
+    /**
+     * @tc.steps: step2. Merge again with same table name but different trackerColNames.
+     * @tc.expected: step2. Entry is overwritten; new trackerColNames are reflected, old ones gone.
+     */
+    TrackerSchema updated;
+    updated.tableName = "merge_table_1";
+    updated.trackerColNames = {"col3"};
+    schema.MergeTrackerSchema(updated);
+    EXPECT_EQ(schema.GetTrackerTables().count("merge_table_1"), 1u);
+    const auto &table = schema.GetTrackerTable("merge_table_1");
+    EXPECT_FALSE(table.IsEmpty());
+    EXPECT_EQ(table.GetTrackerColNames().count("col3"), 1u);
+    EXPECT_EQ(table.GetTrackerColNames().count("col1"), 0u);
+}
+
+/**
+  * @tc.name: MergeTrackerSchema002
+  * @tc.desc: Test MergeTrackerSchema removes the schema (remove branch) when isTrackAction=false
+  *           and trackerColNames is empty.
+  * @tc.type: FUNC
+  * @tc.require:
+  * @tc.author: zqq
+  */
+HWTEST_F(DistributedDBRelationalSchemaAnalysisTest, MergeTrackerSchema002, TestSize.Level0)
+{
+    /**
+     * @tc.steps: step1. Insert a non-empty tracker schema first.
+     * @tc.expected: step1. Table is present in trackerTables_.
+     */
+    RelationalSchemaObject schema;
+    TrackerSchema insertSchema;
+    insertSchema.tableName = "merge_table_2";
+    insertSchema.trackerColNames = {"col1"};
+    schema.MergeTrackerSchema(insertSchema);
+    EXPECT_EQ(schema.GetTrackerTables().count("merge_table_2"), 1u);
+    EXPECT_FALSE(schema.GetTrackerTable("merge_table_2").IsEmpty());
+    /**
+     * @tc.steps: step2. Merge with empty trackerColNames and isTrackAction=false to remove.
+     * @tc.expected: step2. Table is removed from trackerTables_; GetTrackerTable returns empty.
+     */
+    TrackerSchema removeSchema;
+    removeSchema.tableName = "merge_table_2";
+    removeSchema.trackerColNames = {};
+    removeSchema.isTrackAction = false;
+    schema.MergeTrackerSchema(removeSchema);
+    EXPECT_EQ(schema.GetTrackerTables().count("merge_table_2"), 0u);
+    EXPECT_TRUE(schema.GetTrackerTable("merge_table_2").IsEmpty());
+}
+
+/**
+  * @tc.name: MergeTrackerSchema003
+  * @tc.desc: Test MergeTrackerSchema inserts (not removes) when isTrackAction=true, even if
+  *           trackerColNames is empty. Guards the short-circuit in the remove-branch condition.
+  * @tc.type: FUNC
+  * @tc.require:
+  * @tc.author: zqq
+  */
+HWTEST_F(DistributedDBRelationalSchemaAnalysisTest, MergeTrackerSchema003, TestSize.Level0)
+{
+    /**
+     * @tc.steps: step1. Merge a tracker schema with isTrackAction=true and empty trackerColNames.
+     * @tc.expected: step1. Schema is inserted (NOT removed); table is present and non-empty.
+     */
+    RelationalSchemaObject schema;
+    TrackerSchema trackerSchema;
+    trackerSchema.tableName = "merge_table_3";
+    trackerSchema.trackerColNames = {};
+    trackerSchema.isTrackAction = true;
+    schema.MergeTrackerSchema(trackerSchema);
+    EXPECT_EQ(schema.GetTrackerTables().count("merge_table_3"), 1u);
+    EXPECT_FALSE(schema.GetTrackerTable("merge_table_3").IsEmpty());
+}
 }
 #endif // RELATIONAL_STORE
