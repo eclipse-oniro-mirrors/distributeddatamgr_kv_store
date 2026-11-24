@@ -21,6 +21,7 @@
 #include "backup_manager.h"
 #include "dds_trace.h"
 #include "dev_manager.h"
+#include "hmfs_tag_util.h"
 #include "ipc_skeleton.h"
 #include "kvdb_service_client.h"
 #include "log_print.h"
@@ -75,7 +76,8 @@ SingleStoreImpl::SingleStoreImpl(
     isSchemaStore_ = !options.schema.empty();
     isCustomDir_ = options.isCustomDir;
     isApplication_ = options.isApplication;
-    if (syncable_ || autoBackup_) {
+    dumpStackOnFileDeletion_ = options.dumpStackOnFileDeletion;
+    if (syncable_ || autoBackup_ || dumpStackOnFileDeletion_) {
         SetAcl(storeId_, path);
         if (autoBackup_) {
             BackupManager::GetInstance().Prepare(path, storeId_);
@@ -828,6 +830,9 @@ Status SingleStoreImpl::Restore(const std::string &file, const std::string &base
     if (service != nullptr) {
         service->Close({ appId_ }, { storeId_ }, subUser_);
     }
+    const std::string storePath = StoreUtil::GetStoreDir(path_, storeId_);
+    HmfsTagUtil::ClearDbFileTags(storePath + "main/gen_natural_store.db");
+    HmfsTagUtil::ClearDbFileTags(storePath + "meta/meta.db");
     BackupInfo info = { .name = file, .baseDir = baseDir, .appId = appId_, .storeId = storeId_,
         .encrypt = encrypt_, .isCheckIntegrity = isApplication_, .subUser = subUser_, .isCustomDir = isCustomDir_ };
     auto status = BackupManager::GetInstance().Restore(info, dbStore_);
@@ -835,7 +840,7 @@ Status SingleStoreImpl::Restore(const std::string &file, const std::string &base
         ZLOGE("status:0x%{public}x storeId:%{public}s backup:%{public}s ", status,
             StoreUtil::Anonymous(storeId_).c_str(), file.c_str());
     }
-    if (syncable_ || autoBackup_) {
+    if (syncable_ || autoBackup_ || dumpStackOnFileDeletion_) {
         SetAcl(storeId_, path_);
     }
     Options options = { .encrypt = encrypt_, .autoSync = autoSync_, .securityLevel = securityLevel_,
@@ -1269,9 +1274,7 @@ void SingleStoreImpl::ReportDBFaultEvent(Status status, const std::string &funct
 
 void SingleStoreImpl::SetAcl(const std::string &storeId, const std::string &path)
 {
-    std::string dbPath = "";
-    DistributedDB::KvStoreDelegateManager::GetDatabaseDir(storeId, dbPath);
-    std::string fullPath = path + "/kvdb/" +dbPath + "/single_ver/";
+    std::string fullPath = StoreUtil::GetStoreDir(path, storeId);
     if (!StoreUtil::SetDatabaseGid(fullPath)) {
         return;
     }

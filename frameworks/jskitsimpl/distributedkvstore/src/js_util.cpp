@@ -1029,6 +1029,9 @@ JSUtil::StatusMsg JSUtil::GetValue(napi_env env, napi_value in, DistributedKv::O
 
     statusMsg = GetWalStartCheckpointSize(env, in, options);
     ASSERT(statusMsg.status == napi_ok, "get walStartCheckpointSize param failed", statusMsg);
+
+    statusMsg = GetNamedProperty(env, in, "dumpStackOnFileDeletion", options.dumpStackOnFileDeletion, true);
+    ASSERT(statusMsg.status == napi_ok, "get dumpStackOnFileDeletion param failed", statusMsg);
     return napi_ok;
 }
 

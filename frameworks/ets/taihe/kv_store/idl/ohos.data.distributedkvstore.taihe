@@ -118,6 +118,7 @@ struct Options {
     schema: Optional<Schema>;
     rootDir: Optional<String>;
     walStartCheckpointSize: Optional<i32>;
+    dumpStackOnFileDeletion: Optional<bool>;
 }
 
 struct BackupConfig {

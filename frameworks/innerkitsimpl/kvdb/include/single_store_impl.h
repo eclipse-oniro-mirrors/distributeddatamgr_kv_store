@@ -165,6 +165,7 @@ private:
     bool encrypt_ = false;
     bool autoBackup_ = false;
     bool isCustomDir_ = false;
+    bool dumpStackOnFileDeletion_ = false;
     int32_t securityLevel_ = -1;
     int32_t area_ = 1;
     std::string hapName_ = "";

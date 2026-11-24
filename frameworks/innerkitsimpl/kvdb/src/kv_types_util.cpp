@@ -128,6 +128,7 @@ bool Marshalling(const Options &input, MessageParcel &data)
     target->isPublic = input.isPublic;
     target->subUser = input.subUser;
     target->isCustomDir = input.isCustomDir;
+    target->dumpStackOnFileDeletion = input.dumpStackOnFileDeletion;
     return data.WriteRawData(buffer.get(), sizeof(input));
 }
 
@@ -159,6 +160,7 @@ bool Unmarshalling(Options &output, MessageParcel &data)
     output.isPublic = source->isPublic;
     output.subUser = source->subUser;
     output.isCustomDir = source->isCustomDir;
+    output.dumpStackOnFileDeletion = source->dumpStackOnFileDeletion;
     return true;
 }
 

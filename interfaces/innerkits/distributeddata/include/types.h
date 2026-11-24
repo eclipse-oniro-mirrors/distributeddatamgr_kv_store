@@ -604,6 +604,8 @@ struct Options {
      * Larger values reduce checkpoint frequency but increase WAL file size and peak memory usage.
     */
     int32_t walStartCheckpointSize = CHECKPOINT_THRESHOLD_DEFAULT_KB;
+
+    bool dumpStackOnFileDeletion = false;
 };
 
 /**

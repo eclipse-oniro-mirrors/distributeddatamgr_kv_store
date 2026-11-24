@@ -87,6 +87,7 @@ if (data_share_enabled) {
 kvdb_source_config = [
   "../../../frameworks/innerkitsimpl/kvdb/src/backup_manager.cpp",
   "../../../frameworks/innerkitsimpl/kvdb/src/convertor.cpp",
+  "../../../frameworks/innerkitsimpl/kvdb/src/hmfs_tag_util.cpp",
   "../../../frameworks/innerkitsimpl/kvdb/src/kv_types_util.cpp",
   "../../../frameworks/innerkitsimpl/kvdb/src/kvdb_service_client.cpp",
   "../../../frameworks/innerkitsimpl/kvdb/src/observer_bridge.cpp",
