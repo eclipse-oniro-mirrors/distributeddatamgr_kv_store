@@ -18,9 +18,11 @@
 #include "backup_manager.h"
 #include "convertor.h"
 #include "dev_manager.h"
+#include "kv_types_util.h"
 #include "kvdb_service_client.h"
 #include "kvstore_service_death_notifier.h"
 #include "log_print.h"
+#include "message_parcel.h"
 #include "runtime_config.h"
 #include "security_manager.h"
 #include "store_factory.h"
@@ -538,4 +540,75 @@ HWTEST_F(StoreManagerMockTest, DeleteByOptions_WaitsForAfterCreate, TestSize.Lev
     Status result = StoreManager::GetInstance().Delete(appId, storeId, options);
     EXPECT_EQ(result, SUCCESS);
     worker.join();
+}
+
+HWTEST_F(StoreManagerMockTest, GetKVStore_DumpStackFlagEnabled_PassedToAfterCreate, TestSize.Level1)
+{
+    AppId appId = { APP_ID };
+    StoreId storeId = { "DumpStackFlagEnabled" };
+    auto options = GetDefaultOptions();
+    options.dumpStackOnFileDeletion = true;
+    auto service = std::make_shared<KVDBServiceClient>(nullptr);
+
+    KVDBServiceClientMock::status = SUCCESS;
+    KVDBServiceClientMock::afterCreateDumpStackOnFileDeletion = false;
+    EXPECT_CALL(*kVDBServiceClientMock, GetInstance())
+        .WillRepeatedly(Return(service));
+    EXPECT_CALL(*taskExecutorMock, Execute(_))
+        .Times(AtLeast(1))
+        .WillRepeatedly(Return(TaskExecutor::INVALID_TASK_ID));
+
+    Status status = ILLEGAL_STATE;
+    auto kvStore = StoreManager::GetInstance().GetKVStore(appId, storeId, options, status);
+    EXPECT_EQ(status, SUCCESS);
+    EXPECT_NE(kvStore, nullptr);
+    EXPECT_TRUE(KVDBServiceClientMock::afterCreateDumpStackOnFileDeletion);
+}
+
+HWTEST_F(StoreManagerMockTest, GetKVStore_DumpStackFlagDisabled_PassedToAfterCreate, TestSize.Level1)
+{
+    AppId appId = { APP_ID };
+    StoreId storeId = { "DumpStackFlagDisabled" };
+    auto options = GetDefaultOptions();
+    options.dumpStackOnFileDeletion = false;
+    auto service = std::make_shared<KVDBServiceClient>(nullptr);
+
+    KVDBServiceClientMock::status = SUCCESS;
+    KVDBServiceClientMock::afterCreateDumpStackOnFileDeletion = true;
+    EXPECT_CALL(*kVDBServiceClientMock, GetInstance())
+        .WillRepeatedly(Return(service));
+    EXPECT_CALL(*taskExecutorMock, Execute(_))
+        .Times(AtLeast(1))
+        .WillRepeatedly(Return(TaskExecutor::INVALID_TASK_ID));
+
+    Status status = ILLEGAL_STATE;
+    auto kvStore = StoreManager::GetInstance().GetKVStore(appId, storeId, options, status);
+    EXPECT_EQ(status, SUCCESS);
+    EXPECT_NE(kvStore, nullptr);
+    EXPECT_FALSE(KVDBServiceClientMock::afterCreateDumpStackOnFileDeletion);
+}
+
+HWTEST_F(StoreManagerMockTest, OptionsMarshalling_DumpStackFlag_RoundTrip, TestSize.Level1)
+{
+    Options enabled;
+    enabled.dumpStackOnFileDeletion = true;
+    enabled.autoSync = true;
+    enabled.backup = false;
+    MessageParcel enabledParcel;
+    ASSERT_TRUE(OHOS::ITypesUtil::Marshalling(enabled, enabledParcel));
+    Options enabledOutput;
+    enabledOutput.dumpStackOnFileDeletion = false;
+    ASSERT_TRUE(OHOS::ITypesUtil::Unmarshalling(enabledOutput, enabledParcel));
+    EXPECT_TRUE(enabledOutput.dumpStackOnFileDeletion);
+    EXPECT_TRUE(enabledOutput.autoSync);
+    EXPECT_FALSE(enabledOutput.backup);
+
+    Options disabled;
+    disabled.dumpStackOnFileDeletion = false;
+    MessageParcel disabledParcel;
+    ASSERT_TRUE(OHOS::ITypesUtil::Marshalling(disabled, disabledParcel));
+    Options disabledOutput;
+    disabledOutput.dumpStackOnFileDeletion = true;
+    ASSERT_TRUE(OHOS::ITypesUtil::Unmarshalling(disabledOutput, disabledParcel));
+    EXPECT_FALSE(disabledOutput.dumpStackOnFileDeletion);
 }

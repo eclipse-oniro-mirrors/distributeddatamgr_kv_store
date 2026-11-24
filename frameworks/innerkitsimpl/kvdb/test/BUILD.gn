@@ -248,6 +248,78 @@ ohos_unittest("StoreUtilTest") {
   deps += deps_samgr
 }
 
+ohos_unittest("KvDumpStackOnFileDeletionTest") {
+  module_out_path = module_output_path
+
+  sources = [
+    "../../kvdb/src/kv_hiview_reporter_mock.cpp",
+    "dump_stack_on_file_deletion_test.cpp",
+  ]
+
+  configs = [ ":module_private_config" ]
+
+  external_deps = [
+    "bounds_checking_function:libsec_shared",
+    "c_utils:utils",
+    "googletest:gtest",
+  ]
+  external_deps += external_deps_safwk
+  external_deps += external_deps_hilog
+  external_deps += external_deps_ipc_single
+  external_deps += external_deps_samgr
+
+  ldflags = [ "-Wl,--wrap=ioctl" ]
+
+  cflags = [
+    "-fno-access-control",
+  ]
+
+  deps = [
+    ":kvdb_src_file",
+    "//foundation/distributeddatamgr/kv_store/frameworks/libs/distributeddb/:distributeddb",
+  ]
+  deps += deps_safwk
+  deps += deps_hilog
+  deps += deps_ipc_single
+  deps += deps_samgr
+}
+
+ohos_unittest("HmfsTagUtilTest") {
+  module_out_path = module_output_path
+
+  sources = [
+    "../../kvdb/src/kv_hiview_reporter_mock.cpp",
+    "hmfs_tag_util_test.cpp",
+  ]
+
+  configs = [ ":module_private_config" ]
+
+  external_deps = [
+    "bounds_checking_function:libsec_shared",
+    "c_utils:utils",
+    "googletest:gtest",
+  ]
+  external_deps += external_deps_safwk
+  external_deps += external_deps_hilog
+  external_deps += external_deps_ipc_single
+  external_deps += external_deps_samgr
+
+  ldflags = [ "-Wl,--wrap=ioctl" ]
+
+  cflags = [
+    "-fno-access-control",
+  ]
+
+  deps = [
+    ":kvdb_src_file",
+    "//foundation/distributeddatamgr/kv_store/frameworks/libs/distributeddb/:distributeddb",
+  ]
+  deps += deps_safwk
+  deps += deps_hilog
+  deps += deps_ipc_single
+  deps += deps_samgr
+}
+
 ohos_unittest("BackupManagerTest") {
   module_out_path = module_output_path
 
@@ -798,6 +870,8 @@ group("unittest") {
     ":BackupManagerTest",
     ":SingleStoreImplGetTopTest",
     ":StoreFactoryTest",
+    ":KvDumpStackOnFileDeletionTest",
+    ":HmfsTagUtilTest",
     ":StoreUtilTest",
   ]
 

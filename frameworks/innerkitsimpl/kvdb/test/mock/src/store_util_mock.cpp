@@ -148,4 +148,9 @@ bool StoreUtil::SetDatabaseGid(const std::string &path)
 {
     return true;
 }
+
+std::string StoreUtil::GetStoreDir(const std::string &, const std::string &)
+{
+    return "";
+}
 } // namespace OHOS::DistributedKv
