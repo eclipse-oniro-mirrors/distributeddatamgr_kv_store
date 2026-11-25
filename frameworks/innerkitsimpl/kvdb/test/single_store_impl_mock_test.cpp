@@ -234,7 +234,8 @@ private:
 };
 
 std::shared_ptr<SingleStoreImpl> CreateShrinkStore(const std::shared_ptr<ShrinkMockDelegate> &delegate,
-    Convertor &convertor, KvStoreType type = KvStoreType::LOCAL_ONLY, bool isPublic = false)
+    Convertor &convertor, KvStoreType type = KvStoreType::LOCAL_ONLY, bool isPublic = false, bool syncable = false,
+    bool backup = false, bool dumpStackOnFileDeletion = false)
 {
     Options options;
     options.kvStoreType = type;
@@ -242,8 +243,9 @@ std::shared_ptr<SingleStoreImpl> CreateShrinkStore(const std::shared_ptr<ShrinkM
     options.securityLevel = S2;
     options.area = EL1;
     options.baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
-    options.backup = false;
-    options.syncable = false;
+    options.backup = backup;
+    options.syncable = syncable;
+    options.dumpStackOnFileDeletion = dumpStackOnFileDeletion;
     AppId appId = { "SingleStoreImplTest" };
     return std::make_shared<SingleStoreImpl>(delegate, appId, options, convertor);
 }
@@ -1849,5 +1851,57 @@ HWTEST_F(SingleStoreImplMockTest, DefaultSetShrinkEnableContract, testing::ext::
     DefaultShrinkKvStoreFake store;
     EXPECT_EQ(store.SetShrinkEnable(true), NOT_SUPPORT);
     EXPECT_EQ(store.SetShrinkEnable(false), SUCCESS);
+}
+
+/**
+ * @tc.name: Constructor_DumpStackOptionMatrix_ReturnsStore
+ * @tc.desc: Exercise every short-circuit path of the constructor ACL condition
+ * @tc.type: FUNC
+ * @tc.author: agent
+ */
+HWTEST_F(SingleStoreImplMockTest, Constructor_DumpStackOptionMatrix_ReturnsStore, testing::ext::TestSize.Level0)
+{
+    const bool optionMatrix[][3] = {
+        { true, false, false },
+        { false, true, false },
+        { false, false, true },
+        { false, false, false },
+    };
+    for (const auto &flags : optionMatrix) {
+        auto delegate = std::make_shared<ShrinkMockDelegate>();
+        Convertor convertor;
+        auto store =
+            CreateShrinkStore(delegate, convertor, KvStoreType::LOCAL_ONLY, false, flags[0], flags[1], flags[2]);
+        ASSERT_NE(store, nullptr);
+        EXPECT_EQ(store->syncable_, flags[0]);
+        EXPECT_EQ(store->autoBackup_, flags[1]);
+        EXPECT_EQ(store->dumpStackOnFileDeletion_, flags[2]);
+    }
+}
+
+/**
+ * @tc.name: Restore_DumpStackOptionMatrix_ReturnsInvalidArgument
+ * @tc.desc: Exercise every short-circuit path of the restore ACL condition
+ * @tc.type: FUNC
+ * @tc.author: agent
+ */
+HWTEST_F(SingleStoreImplMockTest, Restore_DumpStackOptionMatrix_ReturnsInvalidArgument, testing::ext::TestSize.Level0)
+{
+    EXPECT_CALL(*kVDBServiceClientMock, GetInstance()).WillRepeatedly(Return(nullptr));
+    const bool optionMatrix[][3] = {
+        { true, false, false },
+        { false, true, false },
+        { false, false, true },
+        { false, false, false },
+    };
+    for (const auto &flags : optionMatrix) {
+        auto delegate = std::make_shared<ShrinkMockDelegate>();
+        Convertor convertor;
+        auto store =
+            CreateShrinkStore(delegate, convertor, KvStoreType::LOCAL_ONLY, false, flags[0], flags[1], flags[2]);
+        ASSERT_NE(store, nullptr);
+        EXPECT_EQ(store->Restore("missing_dump_stack_backup", "/data/service/el1/public/database/SingleStoreImplTest"),
+            INVALID_ARGUMENT);
+    }
 }
 } // namespace OHOS::DistributedKv

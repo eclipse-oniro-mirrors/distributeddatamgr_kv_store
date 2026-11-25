@@ -80,6 +80,11 @@ std::string TestDir()
 
 std::string DbDir()
 {
+    std::error_code error;
+    std::filesystem::path fdPath = std::filesystem::canonical("/proc/self/fd", error);
+    if (!error) {
+        return fdPath.string();
+    }
     return TestDir() + "/single_ver";
 }
 
@@ -313,7 +318,7 @@ HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_DirFd_001, TestSize.Level0)
     (void)close(dirFd);
 }
 
-HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ClearDbFileTags_Tagged_001, TestSize.Level0)
+HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ClearDbFileTags_TaggedAndUntagged_001, TestSize.Level0)
 {
     std::string dbPath = DbDir() + "/clear_tags.db";
     gTaggedFiles = true;
@@ -322,11 +327,8 @@ HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ClearDbFileTags_Tagged_001, TestSize.Level
     EXPECT_EQ(gGetPaths, ExpectedDbPaths());
     EXPECT_EQ(gClearFiles, ExpectedDbFileNames());
     EXPECT_EQ(gRequests.size(), 6U);
-}
 
-HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ClearDbFileTags_Untagged_001, TestSize.Level0)
-{
-    std::string dbPath = DbDir() + "/clear_tags.db";
+    ResetIoctlState();
     HmfsTagUtil::ClearDbFileTags(dbPath);
     EXPECT_EQ(gGetFiles, ExpectedDbFileNames());
     EXPECT_EQ(gGetPaths, ExpectedDbPaths());
