@@ -225,7 +225,11 @@ void SyncAbleKvDB::StopSyncer(bool isClosedOperation, bool isStopTaskOnly)
         std::unique_lock<std::mutex> lock(cloudSyncerLock_);
         if (cloudSyncer_ != nullptr) {
             if (isStopTaskOnly) {
-                cloudSyncer_->StopAllTasks();
+                // the only trigger of this leg is Import (stop the tasks without closing the
+                // syncer); the historical errCode -E_USER_CHANGE is kept, the label names the
+                // real entry so the stopped message tells it was an Import
+                cloudSyncer_->StopAllTasks(-E_USER_CHANGE,
+                    ProcessNotifier::StopSource::IMPORT);
             } else if (isClosedOperation) {
                 cloudSyncer_->Close();
                 RefObject::KillAndDecObjRef(cloudSyncer_);
@@ -253,7 +257,8 @@ void SyncAbleKvDB::StopSyncerWithNoLock(bool isClosedOperation)
     if (!isClosedOperation && userChangeListener_ != nullptr) {
         std::unique_lock<std::mutex> lock(cloudSyncerLock_);
         if (cloudSyncer_ != nullptr) {
-            cloudSyncer_->StopAllTasks();
+            cloudSyncer_->StopAllTasks(-E_USER_CHANGE,
+                ProcessNotifier::StopSource::USER_CHANGE);
         }
     }
 #endif

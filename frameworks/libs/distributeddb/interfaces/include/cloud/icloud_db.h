@@ -64,6 +64,10 @@ public:
     {
         return NOT_SUPPORT;
     }
+    virtual ErrorDetail GetErrorDetail() const
+    {
+        return {0, ""};
+    }
 private:
     std::string prepareTraceId;
 };

@@ -223,9 +223,28 @@ enum class CloudErrorAction : uint32_t {
     ACTION_BUTT, // invalid cloud error action
 };
 
+// error detail returned by ICloudDb/IAssetLoader GetErrorDetail
+struct ErrorDetail {
+    uint32_t detailCode = 0; // 0 means not set
+    std::string errorMessage;
+};
+
 struct CloudErrorInfo {
     CloudErrorAction cloudAction = CloudErrorAction::ACTION_DEFAULT;
     std::string errorMessage = "";
+    // Consumer contract on the stage enrichment of external detail codes:
+    // an external code (from ICloudDb/IAssetLoader, without the internal bit22 flag) whose
+    // stage field (bits 16-21) is empty is or-ed with the framework maintained sync stage
+    // on export for debuggability (e.g. 0x2B may surface as 0x2002B during an upload);
+    // a code whose stage field is already occupied (e.g. the DBStatus public codes based on
+    // 0x1A10000) passes through untouched. Consumers matching this field against a known
+    // error table should mask the stage field first: value & ~0x3F0000. The mask recovers
+    // the exact external source value for stage-less codes (the or operation only fills
+    // empty bits), while a stage-occupied value must NOT be masked — the occupied bits are
+    // part of the external number itself, and this difference is inherent to the layout:
+    // an enriched small code and a native code that already occupies those bits collide at
+    // the same exported value and are distinguishable only by the origin knowledge.
+    uint32_t detailCode = 0; // 0 means not set
 };
 
 struct SyncProcess {

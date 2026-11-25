@@ -249,6 +249,12 @@ public:
     {
         return OK;
     }
+
+    DB_API virtual DBStatus RegisterAssetDownloadFailCallback(
+        [[gnu::unused]] const AssetDownloadFailCallback &callback)
+    {
+        return OK;
+    }
 protected:
     virtual DBStatus RemoveDeviceDataInner(const std::string &device, ClearMode mode) = 0;
     virtual DBStatus CreateDistributedTableInner(const std::string &tableName, TableSyncType type) = 0;

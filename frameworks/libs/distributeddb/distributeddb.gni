@@ -278,6 +278,7 @@ distributeddb_cloud_src = [
   "${distributeddb_path}/syncer/src/cloud/cloud_db_proxy.cpp",
   "${distributeddb_path}/syncer/src/cloud/cloud_locker.cpp",
   "${distributeddb_path}/syncer/src/cloud/cloud_syncer.cpp",
+  "${distributeddb_path}/syncer/src/cloud/cloud_syncer_error_detail.cpp",
   "${distributeddb_path}/syncer/src/cloud/cloud_syncer_extend.cpp",
   "${distributeddb_path}/syncer/src/cloud/cloud_syncer_extend_extend.cpp",
   "${distributeddb_path}/syncer/src/cloud/cloud_sync_state_machine.cpp",

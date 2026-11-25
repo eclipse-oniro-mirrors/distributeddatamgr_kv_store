@@ -38,6 +38,7 @@ public:
         bool fullSync = false; // reset download and upload mark when sync
         int errCode = 0;
         int tempErrCode = 0;
+        uint32_t detailCode = 0; // 0 means not set
         int32_t priorityLevel = 0;
         QueryMode queryMode = QueryMode::UPLOAD_AND_DOWNLOAD;
         SyncMode mode = SyncMode::SYNC_MODE_PUSH_ONLY;

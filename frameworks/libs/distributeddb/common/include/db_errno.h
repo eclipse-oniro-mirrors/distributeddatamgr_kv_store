@@ -16,6 +16,9 @@
 #ifndef DISTRIBUTEDDB_ERRNO_H
 #define DISTRIBUTEDDB_ERRNO_H
 
+#include <cstdint>
+#include <string>
+
 namespace DistributedDB {
 constexpr const int E_OK = 0;
 constexpr const int E_BASE = 1000; // different from the other errno.
@@ -202,6 +205,59 @@ constexpr const int E_TABLE_FIELD_MISMATCH = (E_BASE + 215); // Table field mism
 // Distributed schema mismatch between local and remote
 constexpr const int E_DISTRIBUTED_SCHEMA_MISMATCH = (E_BASE + 216);
 constexpr const int E_SUBSCRIBE_QUERY_END = (E_BASE + 217);
+constexpr const int E_FIRST_PAGE_CORRUPTED = (E_BASE + 218); // SQLite File is not a database
+constexpr const int E_PERMISSION = (E_BASE + 219); // Permission denied by file system or sqlite
+
+// detailCode layout: [bit22 internal flag][bits16-21 sync stage][bits0-15 error number]
+enum class SyncStage : uint8_t {
+    GENERAL  = 0x00,
+    DOWNLOAD = 0x01,
+    UPLOAD   = 0x02,
+    MAX_SYNC_STAGE = 0x3F, // sentinel, bits 16-21 all ones
+};
+
+enum class DetailCode : uint32_t {
+    GENERAL_INVALID_ARGS             = 0X0001,
+    GENERAL_INVALID_DB               = 0X0002,
+    GENERAL_INVALID_CONNECTION       = 0X0003,
+    GENERAL_DB_CLOSED                = 0X0004,
+    GENERAL_BUSY                     = 0X0005,
+    GENERAL_INTERNAL_ERROR           = 0X0006,
+    GENERAL_NOT_FOUND                = 0X0007,
+    GENERAL_NOT_SET                  = 0X0008,
+    GENERAL_PERMISSION               = 0X0009,
+    GENERAL_FIRST_PAGE_CORRUPTED     = 0X000A,
+    GENERAL_CORRUPTED_DB             = 0X000B,
+    GENERAL_EKEYREVOKED              = 0X000C,
+    GENERAL_SQLITE_CANT_OPEN         = 0X000D,
+    GENERAL_CONSTRAINT               = 0X000E,
+    GENERAL_DENIED_SQL               = 0X000F,
+    CLOUD_NETWORK_ERROR              = 0X1000,
+    CLOUD_ERROR                      = 0X1001,
+    CLOUD_FULL_RECORDS               = 0X1002,
+    CLOUD_RECORD_CONFLICT            = 0X1003,
+    CLOUD_GID_MISMATCH               = 0X1004,
+    CLOUD_INVALID_ASSET              = 0X1005,
+    CLOUD_ASSET_NOT_FOUND            = 0X1006,
+    CLOUD_ASSET_NOT_FOUND_DOWN_ONLY  = 0X1007,
+    CLOUD_REMOVE_ASSETS_FAILED       = 0X1008,
+    CLOUD_LOCK_ERROR                 = 0X1009,
+    CLOUD_VERSION_CONFLICT           = 0X100A,
+    CLOUD_SYNC_UNSET                 = 0X100B,
+    CLOUD_DISABLED                   = 0X100C,
+    CLOUD_ASSET_SPACE_INSUFFICIENT   = 0X100D,
+    CLOUD_HEARTBEAT_BLOCKED          = 0X100E,
+    CLOUD_HEARTBEAT_FAILED           = 0X100F,
+    CLOUD_SYSTEM_EVENT_STOPPED       = 0X1010,
+    CLOUD_LOCAL_ASSET_NOT_FOUND      = 0X1011,
+    CLOUD_SPACE_INSUFFICIENT_SKIPPED = 0X1012,
+    CLOUD_EXPIRED_CURSOR             = 0X1013,
+    CLOUD_SYNC_TASK_MERGED           = 0X1014,
+    SCHEMA_NOTEXIST                   = 0X2000,
+    SCHEMA_MISMATCH                   = 0X2001,
+    MAX_DETAIL_CODE                  = 0XFFFF, // sentinel, bits 0-15 all ones
+};
+
 } // namespace DistributedDB
 
 #endif // DISTRIBUTEDDB_ERRNO_H

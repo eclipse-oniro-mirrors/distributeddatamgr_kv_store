@@ -576,7 +576,8 @@ int SQLiteRelationalStore::CleanCloudData(ClearMode mode, const std::vector<std:
         LOGE("[RelationalStore] cloudSyncer was not initialized when clean cloud data");
         return -E_INVALID_DB;
     }
-    errCode = cloudSyncer_->StopSyncTask(nullptr);
+    errCode = cloudSyncer_->StopSyncTask(nullptr, -E_CLOUD_ERROR,
+        ProcessNotifier::StopSource::REMOVE_DEVICE_DATA);
     if (errCode != E_OK) {
         LOGE("[RelationalStore] failed to stop sync task, %d.", errCode);
         return errCode;
@@ -1619,7 +1620,8 @@ int SQLiteRelationalStore::SetReference(const std::vector<TableReferenceProperty
     if (errCode == -E_TABLE_REFERENCE_CHANGED) {
         int ret = E_OK;
 #ifdef USE_DISTRIBUTEDDB_CLOUD
-        ret = cloudSyncer_->StopSyncTask(clearWaterMarkFunc);
+        ret = cloudSyncer_->StopSyncTask(clearWaterMarkFunc, -E_CLOUD_ERROR,
+            ProcessNotifier::StopSource::TABLE_REFERENCE_CHANGED);
 #endif
         return ret != E_OK ? ret : errCode;
     }
@@ -1856,6 +1858,16 @@ int SQLiteRelationalStore::SetCloudConflictHandler(const std::shared_ptr<ICloudC
         return -E_INVALID_DB;
     }
     cloudSyncer_->SetCloudConflictHandler(handler);
+    return E_OK;
+}
+
+int SQLiteRelationalStore::RegisterAssetDownloadFailCallback(const AssetDownloadFailCallback &callback) const
+{
+    if (cloudSyncer_ == nullptr) {
+        LOGE("[RelationalStore] cloudSyncer was not initialized when register asset download fail callback");
+        return -E_INVALID_DB;
+    }
+    cloudSyncer_->RegisterAssetDownloadFailCallback(callback);
     return E_OK;
 }
 #endif

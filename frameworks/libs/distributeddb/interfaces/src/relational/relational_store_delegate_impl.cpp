@@ -652,6 +652,20 @@ DBStatus RelationalStoreDelegateImpl::SetCloudConflictHandler(const std::shared_
     return TransferDBErrno(errCode);
 }
 
+DBStatus RelationalStoreDelegateImpl::RegisterAssetDownloadFailCallback(
+    const AssetDownloadFailCallback &callback)
+{
+    if (conn_ == nullptr) {
+        LOGE("[RDBDelegate] Invalid connection for register asset download fail callback!");
+        return DB_ERROR;
+    }
+    int errCode = conn_->RegisterAssetDownloadFailCallback(callback);
+    if (errCode != E_OK) {
+        LOGE("[RDBDelegate] Register asset download fail callback failed:%d", errCode);
+    }
+    return TransferDBErrno(errCode);
+}
+
 std::pair<DBStatus, int32_t> RelationalStoreDelegateImpl::GetDownloadingAssetsCount()
 {
     if (conn_ == nullptr) {

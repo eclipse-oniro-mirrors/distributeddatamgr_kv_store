@@ -33,7 +33,8 @@ void SQLiteRelationalStore::StopAllBackgroundTask(TaskType type)
     if (cloudSyncer_ == nullptr) {
         LOGW("[RelationalStore] cloudSyncer was not initialized when stop all task, type: %u", type);
     } else {
-        (void) cloudSyncer_->StopSyncTask(nullptr, -E_TASK_INTERRUPTED);
+        (void) cloudSyncer_->StopSyncTask(nullptr, -E_TASK_INTERRUPTED,
+            ProcessNotifier::StopSource::STOP_TASK);
     }
 #endif
 }

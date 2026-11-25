@@ -67,6 +67,42 @@ int CloudSyncer::HandleDownloadResultForAsyncDownload(const DownloadItem &downlo
     return errCode;
 }
 
+int CloudSyncer::CommitDownloadAssetsForAsyncDownload(const DownloadItem &downloadItem, InnerProcessInfo &info,
+    DownloadCommitList &commitList, uint32_t &successCount)
+{
+    int errCode = storageProxy_->SetLogTriggerStatus(false, true);
+    if (errCode != E_OK) {
+        return errCode;
+    }
+    for (auto &item : commitList) {
+        std::string gid = std::get<0>(item); // 0 means gid is the first element in assetsInfo
+        // 1 means assetsMap info [colName, assets] is the forth element in downloadList[i]
+        std::map<std::string, Assets> assetsMap = std::get<1>(item);
+        bool setAllNormal = std::get<2>(item); // 2 means whether the download return is E_OK
+        LockStatus status = LockStatus::BUTT;
+        errCode = storageProxy_->GetLockStatusByGid(info.tableName, gid, status);
+        if (errCode == E_OK && status != LockStatus::UNLOCK) {
+            continue;
+        }
+
+        bool isExistAssetDownloadFail = false;
+        if (!downloadItem.recordConflict) {
+            errCode = FillCloudAssetsForOneRecord(gid, assetsMap, info, setAllNormal, isExistAssetDownloadFail);
+            if (errCode != E_OK) {
+                break;
+            }
+        }
+
+        errCode = UpdateRecordFlagForOneRecord(gid, downloadItem, info, isExistAssetDownloadFail);
+        if (errCode != E_OK) {
+            break;
+        }
+        successCount++;
+    }
+    int ret = storageProxy_->SetLogTriggerStatus(true, true);
+    return errCode == E_OK ? ret : errCode;
+}
+
 void CloudSyncer::TriggerAsyncDownloadAssetsIfNeed()
 {
     if (!storageProxy_->IsExistTableContainAssets()) {
@@ -132,7 +168,8 @@ TaskId CloudSyncer::GetCurrentTaskId()
 int32_t CloudSyncer::GetHeartbeatCount(TaskId taskId)
 {
     std::lock_guard<std::mutex> autoLock(heartbeatMutex_);
-    return heartbeatCount_[taskId];
+    auto it = heartbeatCount_.find(taskId);
+    return it == heartbeatCount_.end() ? 0 : it->second;
 }
 
 void CloudSyncer::RemoveHeartbeatData(TaskId taskId)
@@ -151,19 +188,27 @@ void CloudSyncer::ExecuteHeartBeatTask(TaskId taskId)
     }
     if (GetHeartbeatCount(taskId) >= HEARTBEAT_PERIOD) {
         // heartbeat block twice should finish task now
-        SetTaskFailed(taskId, -E_CLOUD_ERROR);
+        SetTaskFailed(taskId, -E_CLOUD_ERROR, "",
+            ProcessNotifier::MakeDetailCode(SyncStage::GENERAL, DetailCode::CLOUD_HEARTBEAT_BLOCKED));
     } else {
-        int ret = cloudDB_.HeartBeat();
+        ErrorDetail externalDetail;
+        int ret = cloudDB_.HeartBeat(externalDetail);
         if (ret != E_OK) {
-            HeartBeatFailed(taskId, ret);
+            HeartBeatFailed(taskId, ret, externalDetail);
         } else {
             std::lock_guard<std::mutex> autoLock(heartbeatMutex_);
-            failedHeartbeatCount_[taskId] = 0;
+            auto failedIt = failedHeartbeatCount_.find(taskId);
+            if (failedIt != failedHeartbeatCount_.end()) {
+                failedIt->second = 0;
+            }
         }
     }
     {
         std::lock_guard<std::mutex> autoLock(heartbeatMutex_);
-        heartbeatCount_[taskId]--;
+        auto countIt = heartbeatCount_.find(taskId);
+        if (countIt != heartbeatCount_.end()) {
+            countIt->second--;
+        }
     }
     if (GetCurrentTaskId() != taskId) {
         RemoveHeartbeatData(taskId);
@@ -229,7 +274,12 @@ void CloudSyncer::SetCurrentTmpError(int errCode, const std::string &errorMessag
     if (cloudTaskInfos_.find(currentContext_.currentTaskId) == cloudTaskInfos_.end()) {
         return;
     }
-    SetTaskErrorInfo(cloudTaskInfos_[currentContext_.currentTaskId], errCode, errorMessage);
+    // compose the internal detail so the no-abort error also writes a full triple
+    uint32_t detailCode = 0u;
+    std::string msg = errorMessage;
+    ProcessNotifier::ResolveErrorDetail(errCode, currentContext_.tableName, detailCode, msg);
+    SetTaskErrorInfo(cloudTaskInfos_[currentContext_.currentTaskId], errCode, msg,
+        StampStageFromNotifierLocked(detailCode));
     cloudTaskInfos_[currentContext_.currentTaskId].tempErrCode = errCode;
 }
 
@@ -282,8 +332,10 @@ int CloudSyncer::DoUpdateExpiredCursor(TaskId taskId, const std::string &table, 
     if (errCode != E_OK) {
         return errCode;
     }
-    errCode = DoUpdatePotentialCursorIfNeed(param.tableName);
+    ErrorDetail externalDetail;
+    errCode = DoUpdatePotentialCursorIfNeed(param.tableName, externalDetail);
     if (errCode != E_OK) {
+        SetTaskFailed(taskId, errCode, externalDetail.errorMessage, externalDetail.detailCode, table);
         return errCode;
     }
     errCode = DoQueryAllGid(taskId, std::move(param));
@@ -340,7 +392,7 @@ int CloudSyncer::DoQueryAllGid(TaskId taskId, SyncParam &&param)
     return errCode;
 }
 
-int CloudSyncer::DoUpdatePotentialCursorIfNeed(const std::string &table)
+int CloudSyncer::DoUpdatePotentialCursorIfNeed(const std::string &table, ErrorDetail &errorDetail)
 {
     std::string backupCursor;
     auto errCode = storageProxy_->GetBackupCloudCursor(table, backupCursor);
@@ -351,7 +403,7 @@ int CloudSyncer::DoUpdatePotentialCursorIfNeed(const std::string &table)
         LOGI("[CloudSyncer] Table[%s] already exist backup cursor", DBCommon::StringMiddleMasking(table).c_str());
         return E_OK;
     }
-    std::tie(errCode, backupCursor) = cloudDB_.GetEmptyCursor(table);
+    std::tie(errCode, backupCursor) = cloudDB_.GetEmptyCursor(table, errorDetail);
     if (errCode != E_OK) {
         return errCode;
     }
@@ -392,12 +444,14 @@ int CloudSyncer::DownloadGIDFromCloud(SyncParam &param)
 {
     VBucket extend;
     extend[CloudDbConstant::CURSOR_FIELD] = param.cloudWaterMark;
-    int errCode = cloudDB_.QueryAllGid(param.tableName, extend, param.downloadData.data);
+    ErrorDetail externalDetail;
+    int errCode = cloudDB_.QueryAllGid(param.tableName, extend, param.downloadData.data, externalDetail);
     if (errCode == -E_QUERY_END) {
         errCode = E_OK;
         param.isLastBatch = true;
     }
     CloudSyncUtils::FillCloudErrorActionFromExtend(param.downloadData.data, param.info);
+    FillCloudErrorInfoFromProxy(errCode, externalDetail, param.info);
     if (errCode != E_OK) {
         LOGE("[CloudSyncer] Query cloud gid failed[%d]", errCode);
     } else if (!param.downloadData.data.empty()) {
@@ -471,12 +525,15 @@ int CloudSyncer::DoFullDownloadAssetsInSync()
     return E_OK;
 }
 
-int CloudSyncer::StopSyncTask(const std::function<int(void)> &removeFunc, int errCode)
+int CloudSyncer::StopSyncTask(const std::function<int(void)> &removeFunc, int errCode,
+    ProcessNotifier::StopSource source)
 {
     if (errCode == -E_TASK_INTERRUPTED) {
-        int ret = cloudDB_.StopCloudSync();
+        ErrorDetail externalDetail;
+        int ret = cloudDB_.StopCloudSync(externalDetail);
         if (ret != E_OK) {
-            LOGE("[CloudSyncer] stop cloud sync failed errCode: %d.", ret);
+            LOGE("[CloudSyncer] stop cloud sync failed errCode: %d, detailCode %u.",
+                ret, externalDetail.detailCode);
             return ret;
         }
     }
@@ -490,7 +547,7 @@ int CloudSyncer::StopSyncTask(const std::function<int(void)> &removeFunc, int er
         asyncCurrentTask = asyncTaskId_;
     }
     if (currentTask != INVALID_TASK_ID || asyncCurrentTask != INVALID_TASK_ID) {
-        StopAllTasks(errCode);
+        StopAllTasks(errCode, source);
     }
     errCode = E_OK;
     if (removeFunc != nullptr) {
@@ -587,14 +644,6 @@ bool CloudSyncer::IsUploadOnlyTask(TaskId taskId)
         return false;
     }
     return iter->second.queryMode == QueryMode::UPLOAD_ONLY;
-}
-
-void CloudSyncer::SetTaskErrorInfo(CloudTaskInfo &taskInfo, int errCode, const std::string &errorMessage) const
-{
-    taskInfo.errCode = errCode;
-    if (!errorMessage.empty() && taskInfo.errorMessage.empty()) {
-        taskInfo.errorMessage = errorMessage;
-    }
 }
 
 bool CloudSyncer::IsCurrentPushOnlyTask()
@@ -713,4 +762,32 @@ void CloudSyncer::MarkCurrentUploadResetFinish()
     currentContext_.processRecorder->MarkUploadResetFinish(currentContext_.currentUserIndex,
         currentContext_.tableName);
 }
+int CloudSyncer::DownloadAssetsOneByOne(const InnerProcessInfo &info, DownloadItem &downloadItem,
+    std::map<std::string, Assets> &downloadAssets, ErrorDetail &errorDetail)
+{
+    bool isSharedTable = false;
+    int errCode = storageProxy_->IsSharedTable(info.tableName, isSharedTable);
+    if (errCode != E_OK) {
+        LOGE("[CloudSyncer] DownloadOneAssetRecord cannot judge the table is a shared table. %d", errCode);
+        return errCode;
+    }
+    int transactionCode = E_OK;
+    // shared table don't download, so just begin transaction once
+    if (isSharedTable) {
+        transactionCode = storageProxy_->StartTransaction(TransactType::IMMEDIATE);
+    }
+    if (transactionCode != E_OK) {
+        LOGE("[CloudSyncer] begin transaction before download failed %d", transactionCode);
+        return transactionCode;
+    }
+    errCode = DownloadAssetsOneByOneInner(isSharedTable, info, downloadItem, downloadAssets, errorDetail);
+    if (isSharedTable) {
+        transactionCode = storageProxy_->Commit();
+        if (transactionCode != E_OK) {
+            LOGW("[CloudSyncer] commit transaction after download failed %d", transactionCode);
+        }
+    }
+    return (errCode == E_OK) ? transactionCode : errCode;
+}
+
 } // namespace DistributedDB

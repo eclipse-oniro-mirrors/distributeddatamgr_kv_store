@@ -126,8 +126,8 @@ void CloudSyncer::Close()
         currentTask = currentContext_.currentTaskId;
     }
     // mark current task db_closed
-    std::string errorMessage = "the database has been closed, all sync tasks are terminated.";
-    SetTaskFailed(currentTask, -E_DB_CLOSED, errorMessage);
+    SetTaskFailed(currentTask, -E_DB_CLOSED, "",
+        ProcessNotifier::MakeDetailCode(SyncStage::GENERAL, DetailCode::GENERAL_DB_CLOSED));
     UnlockIfNeed();
     cloudDB_.Close();
     IfNeedWaitCurTaskFinished(true);
@@ -266,6 +266,7 @@ int CloudSyncer::DoSync(TaskId taskId)
 std::pair<int, bool> CloudSyncer::DoFirstDownload(TaskId taskId, const CloudTaskInfo &taskInfo, bool needUpload,
     bool &isFirstDownload)
 {
+    SetCurrentStage(SyncStage::DOWNLOAD);
     std::pair<int, bool> res;
     auto &[errCode, isFinished] = res;
     isFinished = false;
@@ -366,6 +367,7 @@ int CloudSyncer::DoUploadInNeed(const CloudTaskInfo &taskInfo, const bool needUp
 
 CloudSyncEvent CloudSyncer::SyncMachineDoDownload()
 {
+    SetCurrentStage(SyncStage::DOWNLOAD);
     CloudTaskInfo taskInfo;
     bool needUpload;
     bool isFirstDownload;
@@ -400,6 +402,7 @@ CloudSyncEvent CloudSyncer::SyncMachineDoDownload()
 
 CloudSyncEvent CloudSyncer::SyncMachineDoUpload()
 {
+    SetCurrentStage(SyncStage::UPLOAD);
     CloudTaskInfo taskInfo;
     bool needUpload;
     {
@@ -418,7 +421,7 @@ CloudSyncEvent CloudSyncer::SyncMachineDoUpload()
     if (errCode != E_OK) {
         {
             std::lock_guard<std::mutex> autoLock(dataLock_);
-            cloudTaskInfos_[currentContext_.currentTaskId].errCode = errCode;
+            SetCurrentTaskFailedWithoutLock(errCode);
         }
         if (errCode == -E_TASK_PAUSED) {
             DBDfxAdapter::ReportBehavior(
@@ -436,6 +439,8 @@ CloudSyncEvent CloudSyncer::SyncMachineDoUpload()
 
 CloudSyncEvent CloudSyncer::SyncMachineDoFinished()
 {
+    // no stage reset on purpose: the endgame export stamps the stage the notifier
+    // maintained, so a task ended by an error keeps the stage where the error occurred
     UnlockIfNeed();
     TaskId taskId;
     int errCode;
@@ -456,17 +461,31 @@ CloudSyncEvent CloudSyncer::SyncMachineDoFinished()
         DoFinished(taskId, errCode);
     } else {
         CloudTaskInfo taskInfo;
+        std::shared_ptr<ProcessNotifier> notifier;
         {
             std::lock_guard<std::mutex> autoLock(dataLock_);
             taskInfo = cloudTaskInfos_[currentContext_.currentTaskId];
+            notifier = currentContext_.notifier;
+            // the no-abort soft error surfaces nowhere else in the multi user flow: the boundary
+            // notify reads the snapshot errCode only and the endgame temp backfill belongs to
+            // the last user, so backfill the temp code into this user's own snapshot to keep
+            // the single user semantics (Check020): the soft error of a user becomes that
+            // user's final errCode instead of leaking to the next user or vanishing
+            if (taskInfo.errCode == E_OK && taskInfo.tempErrCode != E_OK) {
+                taskInfo.errCode = taskInfo.tempErrCode;
+            }
+            // snapshot and reset in one critical section: a failure written between the
+            // snapshot and a separate reset (e.g. a heartbeat callback racing at the boundary)
+            // would be in neither the snapshot nor any later export, silently dropped
+            auto &taskLevelInfo = cloudTaskInfos_[currentContext_.currentTaskId];
+            taskLevelInfo.errCode = E_OK;
+            taskLevelInfo.detailCode = 0u;
+            taskLevelInfo.errorMessage.clear();
+            taskLevelInfo.tempErrCode = E_OK;
         }
         taskInfo.status = ProcessStatus::FINISHED;
-        if (currentContext_.notifier != nullptr) {
-            currentContext_.notifier->NotifyProcess(taskInfo, {}, true);
-        }
-        {
-            std::lock_guard<std::mutex> autoLock(dataLock_);
-            cloudTaskInfos_[currentContext_.currentTaskId].errCode = E_OK;
+        if (notifier != nullptr) {
+            notifier->NotifyProcess(taskInfo, {}, true);
         }
     }
     return CloudSyncEvent::ALL_TASK_FINISHED_EVENT;
@@ -1379,34 +1398,33 @@ int CloudSyncer::PreHandleData(VBucket &datum, const std::vector<std::string> &p
     return E_OK;
 }
 
-int CloudSyncer::QueryCloudData(TaskId taskId, const std::string &tableName, std::string &cloudWaterMark,
-    DownloadData &downloadData, bool &needCheckWaterMark)
+int CloudSyncer::QueryCloudData(TaskId taskId, SyncParam &param, ErrorDetail &errorDetail)
 {
     int ret = E_OK;
     bool isNeedDownload = true;
-    if (needCheckWaterMark) {
-        needCheckWaterMark = false;
-        ret = IsNeedDownload(tableName, cloudWaterMark, isNeedDownload);
+    if (param.needCheckWaterMark) {
+        param.needCheckWaterMark = false;
+        ret = IsNeedDownload(param.info.tableName, param.cloudWaterMark, isNeedDownload);
     }
     if (!isNeedDownload) {
         LOGI("[CloudSyncer] cloudWaterMark no update, skip download.");
         return -E_QUERY_END;
     }
     VBucket extend;
-    ret = FillDownloadExtend(taskId, tableName, cloudWaterMark, extend);
+    ret = FillDownloadExtend(taskId, param.info.tableName, param.cloudWaterMark, extend);
     if (ret != E_OK) {
         return ret;
     }
-    ret = cloudDB_.Query(tableName, extend, downloadData.data);
-    storageProxy_->FilterDownloadRecordNotFound(tableName, downloadData);
-    storageProxy_->FilterDownloadRecordNoneSchemaField(tableName, downloadData);
-    if ((ret == E_OK || ret == -E_QUERY_END) && downloadData.data.empty()) {
+    ret = cloudDB_.Query(param.info.tableName, extend, param.downloadData.data, errorDetail);
+    storageProxy_->FilterDownloadRecordNotFound(param.info.tableName, param.downloadData);
+    storageProxy_->FilterDownloadRecordNoneSchemaField(param.info.tableName, param.downloadData);
+    if ((ret == E_OK || ret == -E_QUERY_END) && param.downloadData.data.empty()) {
         if (extend[CloudDbConstant::CURSOR_FIELD].index() != TYPE_INDEX<std::string>) {
             LOGE("[CloudSyncer] cursor type is not valid=%d", extend[CloudDbConstant::CURSOR_FIELD].index());
             return -E_CLOUD_ERROR;
         }
-        cloudWaterMark = std::get<std::string>(extend[CloudDbConstant::CURSOR_FIELD]);
-        LOGD("[CloudSyncer] Download data is empty, try to use other cursor=%s", cloudWaterMark.c_str());
+        param.cloudWaterMark = std::get<std::string>(extend[CloudDbConstant::CURSOR_FIELD]);
+        LOGD("[CloudSyncer] Download data is empty, try to use other cursor=%s", param.cloudWaterMark.c_str());
         return ret;
     }
     if (ret == -E_QUERY_END) {
@@ -1517,23 +1535,27 @@ int CloudSyncer::LockCloud(TaskId taskId)
 {
     int period;
     {
-        auto res = cloudDB_.Lock();
+        ErrorDetail externalDetail;
+        auto res = cloudDB_.Lock(externalDetail);
         if (res.first != E_OK) {
+            WarnIfExternalCodeCollides(externalDetail.detailCode);
+            SetTaskFailed(taskId, res.first, externalDetail.errorMessage, externalDetail.detailCode);
             return res.first;
         }
         period = static_cast<int>(res.second) / HEARTBEAT_PERIOD;
     }
     int errCode = StartHeartBeatTimer(period, taskId);
     if (errCode != E_OK) {
-        UnlockCloud();
+        ErrorDetail unusedDetail;
+        UnlockCloud(unusedDetail);
     }
     return errCode;
 }
 
-int CloudSyncer::UnlockCloud()
+int CloudSyncer::UnlockCloud(ErrorDetail &errorDetail)
 {
     FinishHeartBeatTimer();
-    return cloudDB_.UnLock();
+    return cloudDB_.UnLock(errorDetail);
 }
 
 int CloudSyncer::StartHeartBeatTimer(int period, TaskId taskId)
@@ -1542,6 +1564,13 @@ int CloudSyncer::StartHeartBeatTimer(int period, TaskId taskId)
         LOGW("[CloudSyncer] HeartBeat timer has been start!");
         return E_OK;
     }
+    // create the heartbeat counters before the timer starts, so the first callback always
+    // finds them; later accesses use find to avoid implicit insertion
+    {
+        std::lock_guard<std::mutex> autoLock(heartbeatMutex_);
+        heartbeatCount_[taskId] = 0;
+        failedHeartbeatCount_[taskId] = 0;
+    }
     TimerId timerId = 0;
     int errCode = RuntimeContext::GetInstance()->SetTimer(period, [this, taskId](TimerId timerId) {
         HeartBeat(timerId, taskId);
@@ -1549,6 +1578,10 @@ int CloudSyncer::StartHeartBeatTimer(int period, TaskId taskId)
     }, nullptr, timerId);
     if (errCode != E_OK) {
         LOGE("[CloudSyncer] HeartBeat timer start failed %d", errCode);
+        // roll back the counters, no callback can be in flight since the timer never started
+        std::lock_guard<std::mutex> autoLock(heartbeatMutex_);
+        heartbeatCount_.erase(taskId);
+        failedHeartbeatCount_.erase(taskId);
         return errCode;
     }
     timerId_ = timerId;
@@ -1573,7 +1606,10 @@ void CloudSyncer::HeartBeat(TimerId timerId, TaskId taskId)
     IncObjRef(this);
     {
         std::lock_guard<std::mutex> autoLock(heartbeatMutex_);
-        heartbeatCount_[taskId]++;
+        auto it = heartbeatCount_.find(taskId);
+        if (it != heartbeatCount_.end()) {
+            it->second++;
+        }
     }
     int errCode = RuntimeContext::GetInstance()->ScheduleTask([this, taskId]() {
         ExecuteHeartBeatTask(taskId);
@@ -1582,32 +1618,6 @@ void CloudSyncer::HeartBeat(TimerId timerId, TaskId taskId)
         LOGW("[CloudSyncer] schedule heartbeat task failed %d", errCode);
         DecObjRef(this);
     }
-}
-
-void CloudSyncer::HeartBeatFailed(TaskId taskId, int errCode)
-{
-    {
-        std::lock_guard<std::mutex> autoLock(heartbeatMutex_);
-        failedHeartbeatCount_[taskId]++;
-        if (failedHeartbeatCount_[taskId] < MAX_HEARTBEAT_FAILED_LIMIT) {
-            return;
-        }
-    }
-    LOGW("[CloudSyncer] heartbeat failed too much times!");
-    FinishHeartBeatTimer();
-    SetTaskFailed(taskId, errCode);
-}
-
-void CloudSyncer::SetTaskFailed(TaskId taskId, int errCode, const std::string &errorMessage)
-{
-    std::lock_guard<std::mutex> autoLock(dataLock_);
-    if (cloudTaskInfos_.find(taskId) == cloudTaskInfos_.end()) {
-        return;
-    }
-    if (cloudTaskInfos_[taskId].errCode != E_OK) {
-        return;
-    }
-    SetTaskErrorInfo(cloudTaskInfos_[taskId], errCode, errorMessage);
 }
 
 int32_t CloudSyncer::GetCloudSyncTaskCount()
@@ -1650,7 +1660,8 @@ int CloudSyncer::CleanCloudData(ClearMode mode, const std::vector<std::string> &
     }
     LOGI("[CloudSyncer] Clean cloud data success, mode=%d", mode);
     if (!assets.empty() && mode == FLAG_AND_DATA) {
-        errCode = cloudDB_.RemoveLocalAssets(assets);
+        ErrorDetail unusedDetail;
+        errCode = cloudDB_.RemoveLocalAssets(assets, unusedDetail);
         if (errCode != E_OK) {
             LOGE("[Storage Executor] failed to remove local assets, %d.", errCode);
             storageProxy_->Rollback();
@@ -1792,17 +1803,6 @@ void CloudSyncer::MarkCurrentTaskPausedIfNeed(const CloudTaskInfo &taskInfo)
     }
 }
 
-void CloudSyncer::SetCurrentTaskFailedWithoutLock(int errCode, const std::string &errorMessage)
-{
-    if (currentContext_.currentTaskId == INVALID_TASK_ID) {
-        return;
-    }
-    if (cloudTaskInfos_.find(currentContext_.currentTaskId) == cloudTaskInfos_.end()) {
-        return;
-    }
-    SetTaskErrorInfo(cloudTaskInfos_[currentContext_.currentTaskId], errCode, errorMessage);
-}
-
 int CloudSyncer::LockCloudIfNeed(TaskId taskId)
 {
     bool lockCloud = false;
@@ -1818,9 +1818,15 @@ int CloudSyncer::LockCloudIfNeed(TaskId taskId)
     int errCode = CloudLocker::BuildCloudLock([taskId, this]() {
         return LockCloud(taskId);
     }, [this]() {
-        int unlockCode = UnlockCloud();
+        ErrorDetail externalDetail;
+        int unlockCode = UnlockCloud(externalDetail);
         if (unlockCode != E_OK) {
-            SetCurrentTaskFailedWithoutLock(unlockCode);
+            // the finalize only fires from ~CloudLocker, whose sole last-reference drop point
+            // (UnlockIfNeed) releases dataLock_ around the network unlock, so taking the lock
+            // here cannot deadlock; it restores the caller-holds-dataLock_ contract of the
+            // WithoutLock helper, which reads currentContext_ (including the notifier shared_ptr)
+            std::lock_guard<std::mutex> autoLock(dataLock_);
+            SetCurrentTaskFailedWithoutLock(unlockCode, externalDetail.errorMessage, externalDetail.detailCode);
         }
     }, lockCloud, locker);
     {
@@ -1844,8 +1850,12 @@ void CloudSyncer::UnlockIfNeed()
 
 void CloudSyncer::ClearCurrentContextWithoutLock()
 {
-    heartbeatCount_.erase(currentContext_.currentTaskId);
-    failedHeartbeatCount_.erase(currentContext_.currentTaskId);
+    {
+        // hold the heartbeat mutex while erasing, the heartbeat thread may access the counters concurrently
+        std::lock_guard<std::mutex> autoLock(heartbeatMutex_);
+        heartbeatCount_.erase(currentContext_.currentTaskId);
+        failedHeartbeatCount_.erase(currentContext_.currentTaskId);
+    }
     currentContext_.currentTaskId = INVALID_TASK_ID;
     currentContext_.notifier = nullptr;
     strategyProxy_.ResetStrategy();
@@ -1903,6 +1913,10 @@ void CloudSyncer::ClearContextAndNotify(TaskId taskId, int errCode)
     LOGI("[CloudSyncer] finished storeId %.3s taskId %" PRIu64 " errCode %d", info.storeId.c_str(), taskId,
         info.errCode);
     info.status = ProcessStatus::FINISHED;
+    // fallback for failures that only propagated by return code,
+    // the notifier stamps the stage it maintained when the task was running
+    ProcessNotifier::ResolveErrorDetail(info.errCode, info.table.empty() ? "" : info.table.front(),
+        info.detailCode, info.errorMessage);
     if (notifier != nullptr) {
         notifier->UpdateAllTablesFinally();
         notifier->NotifyProcess(info, {}, true);
@@ -1972,7 +1986,9 @@ int CloudSyncer::DownloadOneAssetRecord(const std::set<Key> &dupHashKeySet, cons
         return errorCode;
     }
     if (!isSharedTable) {
-        errorCode = DownloadAssetsOneByOne(info, downloadItem, downloadItem.assets);
+        ErrorDetail externalDetail;
+        errorCode = DownloadAssetsOneByOne(info, downloadItem, downloadItem.assets, externalDetail);
+        FillCloudErrorInfoFromProxy(errorCode, externalDetail, info);
         if (errorCode == -E_NOT_SET) {
             return -E_NOT_SET;
         }
@@ -2085,8 +2101,8 @@ int CloudSyncer::DownloadDataFromCloud(TaskId taskId, SyncParam &param, bool isF
     if (param.isAssetsOnly) {
         param.cloudWaterMarkForAssetsOnly = param.cloudWaterMark;
     }
-    int ret = QueryCloudData(taskId, param.info.tableName, param.cloudWaterMark, param.downloadData,
-        param.needCheckWaterMark);
+    ErrorDetail externalDetail;
+    int ret = QueryCloudData(taskId, param, externalDetail);
     {
         std::lock_guard<std::mutex> autoLock(dataLock_);
         CloudSyncUtils::CheckQueryCloudData(
@@ -2097,6 +2113,7 @@ int CloudSyncer::DownloadDataFromCloud(TaskId taskId, SyncParam &param, bool isF
         // Won't break here since downloadData may not be null
         param.isLastBatch = true;
     } else if (ret != E_OK) {
+        FillCloudErrorInfoFromProxy(ret, externalDetail, param.info);
         if (ret != -E_EXPIRED_CURSOR) {
             std::lock_guard<std::mutex> autoLock(dataLock_);
             param.info.tableStatus = ProcessStatus::FINISHED;
@@ -2149,4 +2166,5 @@ void CloudSyncer::ModifyDownLoadInfoCount(const int errorCode, InnerProcessInfo 
         info.downLoadInfo.successCount -= 1;
     }
 }
+
 } // namespace DistributedDB

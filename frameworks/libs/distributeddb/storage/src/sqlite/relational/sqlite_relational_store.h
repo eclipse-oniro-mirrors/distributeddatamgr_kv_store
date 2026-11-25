@@ -127,6 +127,8 @@ public:
     int SetCloudConflictHandler(const std::shared_ptr<ICloudConflictHandler> &handler);
 
     int StopGenLogTask(const std::vector<std::string> &tableList);
+
+    int RegisterAssetDownloadFailCallback(const AssetDownloadFailCallback &callback) const;
 #endif
 
 #ifdef USE_DISTRIBUTEDDB_DEVICE

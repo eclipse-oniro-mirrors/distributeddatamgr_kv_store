@@ -1042,7 +1042,8 @@ int SQLiteSingleVerNaturalStore::RemoveDeviceData(const std::string &deviceName,
         errCode = removeFunc();
     } else {
 #ifdef USE_DISTRIBUTEDDB_CLOUD
-        errCode = syncer->StopSyncTask(removeFunc);
+        errCode = syncer->StopSyncTask(removeFunc, -E_CLOUD_ERROR,
+            ProcessNotifier::StopSource::REMOVE_DEVICE_DATA);
         DecObjRef(syncer);
 #endif
     }
@@ -1062,7 +1063,8 @@ int SQLiteSingleVerNaturalStore::RemoveDeviceData(const std::string &deviceName,
         errCode = removeFunc();
     } else {
 #ifdef USE_DISTRIBUTEDDB_CLOUD
-        errCode = syncer->StopSyncTask(removeFunc);
+        errCode = syncer->StopSyncTask(removeFunc, -E_CLOUD_ERROR,
+            ProcessNotifier::StopSource::REMOVE_DEVICE_DATA);
         DecObjRef(syncer);
 #endif
     }
@@ -1091,7 +1093,8 @@ int SQLiteSingleVerNaturalStore::RemoveDeviceData(const std::string &deviceName,
         errCode = removeFunc();
     } else {
 #ifdef USE_DISTRIBUTEDDB_CLOUD
-        errCode = syncer->StopSyncTask(removeFunc);
+        errCode = syncer->StopSyncTask(removeFunc, -E_CLOUD_ERROR,
+            ProcessNotifier::StopSource::REMOVE_DEVICE_DATA);
         DecObjRef(syncer);
 #endif
     }
