@@ -14,19 +14,16 @@
  */
 #include <condition_variable>
 #include <gtest/gtest.h>
-#include <unistd.h>
 #include <vector>
 
 #include "access_token.h"
 #include "accesstoken_kit.h"
-#include "acl.h"
 #include "block_data.h"
 #include "dev_manager.h"
 #include "device_manager.h"
 #include "distributed_kv_data_manager.h"
 #include "dm_device_info.h"
 #include "file_ex.h"
-#include "kv_store_delegate_manager.h"
 #include "kv_store_nb_delegate.h"
 #include "nativetoken_kit.h"
 #include "single_store_impl.h"
@@ -38,23 +35,12 @@
 
 using namespace testing::ext;
 using namespace OHOS::DistributedKv;
-using namespace OHOS::DATABASE_UTILS;
 using namespace OHOS::Security::AccessToken;
 using DBStatus = DistributedDB::DBStatus;
 using DBStore = DistributedDB::KvStoreNbDelegate;
 using SyncCallback = KvStoreSyncCallback;
 using DevInfo = OHOS::DistributedHardware::DmDeviceInfo;
 namespace OHOS::Test {
-constexpr int32_t TEST_SERVICE_GID = 3012;
-
-bool HasServiceAcl(const std::string &dbFile)
-{
-    if (dbFile.empty() || access(dbFile.c_str(), F_OK) != 0) {
-        return false;
-    }
-    Acl acl(dbFile, Acl::ACL_XATTR_ACCESS);
-    return acl.HasAccessGroup(TEST_SERVICE_GID, Acl::R_RIGHT | Acl::W_RIGHT | Acl::E_RIGHT);
-}
 
 std::vector<uint8_t> Random(int32_t len)
 {
@@ -93,10 +79,8 @@ public:
     void TearDown();
 
     void SetNativeTokenId();
-    std::shared_ptr<SingleKvStore> CreateKVStore(std::string storeIdTest, KvStoreType type, bool encrypt, bool backup,
-        bool syncable = true, bool dumpStackOnFileDeletion = false);
-    std::shared_ptr<SingleStoreImpl> CreateStoreImpl(bool autosync = false, bool dumpStackOnFileDeletion = false,
-        bool syncable = true, bool backup = true, const std::string &storeIdTest = "DestructorTest");
+    std::shared_ptr<SingleKvStore> CreateKVStore(std::string storeIdTest, KvStoreType type, bool encrypt, bool backup);
+    std::shared_ptr<SingleStoreImpl> CreateKVStore(bool autosync = false);
     std::shared_ptr<SingleKvStore> kvStore_;
     static inline std::shared_ptr<StoreFactory> storeFactory = nullptr;
     static constexpr int MAX_RESULTSET_SIZE = 8;
@@ -140,8 +124,8 @@ void SingleStoreImplTest::TearDown(void)
     ASSERT_EQ(status, SUCCESS);
 }
 
-std::shared_ptr<SingleKvStore> SingleStoreImplTest::CreateKVStore(std::string storeIdTest, KvStoreType type,
-    bool encrypt, bool backup, bool syncable, bool dumpStackOnFileDeletion)
+std::shared_ptr<SingleKvStore> SingleStoreImplTest::CreateKVStore(
+    std::string storeIdTest, KvStoreType type, bool encrypt, bool backup)
 {
     Options options;
     options.kvStoreType = type;
@@ -149,8 +133,6 @@ std::shared_ptr<SingleKvStore> SingleStoreImplTest::CreateKVStore(std::string st
     options.encrypt = encrypt;
     options.area = EL1;
     options.backup = backup;
-    options.syncable = syncable;
-    options.dumpStackOnFileDeletion = dumpStackOnFileDeletion;
     options.baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
 
     AppId appId = { "SingleStoreImplTest" };
@@ -159,11 +141,10 @@ std::shared_ptr<SingleKvStore> SingleStoreImplTest::CreateKVStore(std::string st
     return StoreManager::GetInstance().GetKVStore(appId, storeId, options, status);
 }
 
-std::shared_ptr<SingleStoreImpl> SingleStoreImplTest::CreateStoreImpl(bool autosync, bool dumpStackOnFileDeletion,
-    bool syncable, bool backup, const std::string &storeIdTest)
+std::shared_ptr<SingleStoreImpl> SingleStoreImplTest::CreateKVStore(bool autosync)
 {
     AppId appId = { "SingleStoreImplTest" };
-    StoreId storeId = { storeIdTest };
+    StoreId storeId = { "DestructorTest" };
     std::shared_ptr<SingleStoreImpl> kvStore;
     Options options;
     options.kvStoreType = SINGLE_VERSION;
@@ -171,9 +152,6 @@ std::shared_ptr<SingleStoreImpl> SingleStoreImplTest::CreateStoreImpl(bool autos
     options.area = EL1;
     options.autoSync = autosync;
     options.baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
-    options.syncable = syncable;
-    options.backup = backup;
-    options.dumpStackOnFileDeletion = dumpStackOnFileDeletion;
     auto dbManager = storeFactory->GetDBManager(options.baseDir, appId);
     auto dbPassword = SecurityManager::GetInstance().GetDBPassword(storeId.storeId, options.baseDir, options.encrypt);
     DBStatus dbStatus = DBStatus::DB_ERROR;
@@ -547,7 +525,7 @@ HWTEST_F(SingleStoreImplTest, SubscribeKvStore003, TestSize.Level0)
 {
     auto observer = std::make_shared<TestObserver>();
     std::shared_ptr<SingleStoreImpl> kvStore;
-    kvStore = CreateStoreImpl();
+    kvStore = CreateKVStore();
     ASSERT_NE(kvStore, nullptr);
     kvStore->isClientSync_ = true;
     auto status = kvStore->SubscribeKvStore(SUBSCRIBE_TYPE_LOCAL, observer);
@@ -1883,7 +1861,7 @@ HWTEST_F(SingleStoreImplTest, GetDeviceEntries001, TestSize.Level1)
     SetNativeTokenId();
     std::string pkgNameEx = "_distributed_data";
     std::shared_ptr<SingleStoreImpl> kvStore;
-    kvStore = CreateStoreImpl();
+    kvStore = CreateKVStore();
     ASSERT_NE(kvStore, nullptr);
     std::vector<Entry> output;
     std::string device = DevManager::GetInstance().GetUnEncryptedUuid();
@@ -1909,7 +1887,7 @@ HWTEST_F(SingleStoreImplTest, GetDeviceEntries001, TestSize.Level1)
 HWTEST_F(SingleStoreImplTest, DoSync001, TestSize.Level1)
 {
     std::shared_ptr<SingleStoreImpl> kvStore;
-    kvStore = CreateStoreImpl();
+    kvStore = CreateKVStore();
     EXPECT_NE(kvStore, nullptr) << "kvStorePtr is null.";
     std::string deviceId = "no_exist_device_id";
     std::vector<std::string> deviceIds = { deviceId };
@@ -1949,7 +1927,7 @@ HWTEST_F(SingleStoreImplTest, SetCapabilityEnabled001, TestSize.Level1)
 HWTEST_F(SingleStoreImplTest, DoClientSync001, TestSize.Level1)
 {
     std::shared_ptr<SingleStoreImpl> kvStore;
-    kvStore = CreateStoreImpl();
+    kvStore = CreateKVStore();
     ASSERT_NE(kvStore, nullptr);
     KVDBService::SyncInfo syncInfo;
     syncInfo.mode = SyncMode::PULL;
@@ -1969,7 +1947,7 @@ HWTEST_F(SingleStoreImplTest, DoClientSync001, TestSize.Level1)
 HWTEST_F(SingleStoreImplTest, DoNotifyChange001, TestSize.Level1)
 {
     std::shared_ptr<SingleStoreImpl> kvStore;
-    kvStore = CreateStoreImpl();
+    kvStore = CreateKVStore();
     EXPECT_NE(kvStore, nullptr) << "kvStorePtr is null.";
     auto status = kvStore->Put({ "Put Test" }, { "Put Value" });
     ASSERT_EQ(kvStore->notifyExpiredTime_, 0);
@@ -1995,7 +1973,7 @@ HWTEST_F(SingleStoreImplTest, DoNotifyChange001, TestSize.Level1)
 HWTEST_F(SingleStoreImplTest, DoAutoSync001, TestSize.Level1)
 {
     std::shared_ptr<SingleStoreImpl> kvStore;
-    kvStore = CreateStoreImpl(true);
+    kvStore = CreateKVStore(true);
     ASSERT_NE(kvStore, nullptr);
     kvStore->isApplication_ = true;
     auto status = kvStore->Put({ "Put Test" }, { "Put Value" });
@@ -2011,7 +1989,7 @@ HWTEST_F(SingleStoreImplTest, DoAutoSync001, TestSize.Level1)
 HWTEST_F(SingleStoreImplTest, GenerateDbFiles, TestSize.Level0)
 {
     std::shared_ptr<SingleStoreImpl> kvStore;
-    kvStore = CreateStoreImpl(true);
+    kvStore = CreateKVStore(true);
     ASSERT_NE(kvStore, nullptr);
     StoreId storeId = { "SingleKVStore" };
     kvStore->SetAcl(storeId, "");
@@ -2792,79 +2770,4 @@ HWTEST_F(SingleStoreImplTest, GetPageSize003, TestSize.Level1)
     status = StoreManager::GetInstance().Delete(appId, storeId, baseDir);
     ASSERT_EQ(status, SUCCESS);
 }
-
-HWTEST_F(SingleStoreImplTest, DumpStackOnFileDeletion_AclEnabled_001, TestSize.Level1)
-{
-    auto kvStore = CreateStoreImpl(false, true, false, false, "DumpStackAclEnabled");
-    ASSERT_NE(kvStore, nullptr);
-
-    std::string storeDir = "";
-    ASSERT_EQ(DistributedDB::KvStoreDelegateManager::GetDatabaseDir("DumpStackAclEnabled", storeDir), DBStatus::OK);
-    std::string dbFile = "/data/service/el1/public/database/SingleStoreImplTest/kvdb/" + storeDir +
-        "/single_ver/main/gen_natural_store.db";
-    ASSERT_EQ(access(dbFile.c_str(), F_OK), 0);
-    EXPECT_TRUE(HasServiceAcl(dbFile));
-}
-
-HWTEST_F(SingleStoreImplTest, DumpStackOnFileDeletion_AclDisabled_001, TestSize.Level1)
-{
-    auto kvStore = CreateStoreImpl(false, false, false, false, "DumpStackAclDisabled");
-    ASSERT_NE(kvStore, nullptr);
-
-    std::string storeDir = "";
-    ASSERT_EQ(DistributedDB::KvStoreDelegateManager::GetDatabaseDir("DumpStackAclDisabled", storeDir), DBStatus::OK);
-    std::string dbFile = "/data/service/el1/public/database/SingleStoreImplTest/kvdb/" + storeDir +
-        "/single_ver/main/gen_natural_store.db";
-    ASSERT_EQ(access(dbFile.c_str(), F_OK), 0);
-    EXPECT_FALSE(HasServiceAcl(dbFile));
-}
-
-HWTEST_F(SingleStoreImplTest, RestoreWithoutSyncAndBackup_AclSkipped_001, TestSize.Level1)
-{
-    auto kvStore = CreateKVStore(std::string("RestoreNoAclStore"), SINGLE_VERSION, false, false, false, false);
-    ASSERT_NE(kvStore, nullptr);
-
-    Status status = kvStore->Restore("no_acl_backup", "/data/service/el1/public/database/SingleStoreImplTest");
-    ASSERT_NE(status, SUCCESS);
-
-    std::string storeDir = "";
-    ASSERT_EQ(DistributedDB::KvStoreDelegateManager::GetDatabaseDir("RestoreNoAclStore", storeDir), DBStatus::OK);
-    std::string dbFile = "/data/service/el1/public/database/SingleStoreImplTest/kvdb/" + storeDir +
-        "/single_ver/main/gen_natural_store.db";
-    ASSERT_EQ(access(dbFile.c_str(), F_OK), 0);
-    EXPECT_FALSE(HasServiceAcl(dbFile));
-}
-
-HWTEST_F(SingleStoreImplTest, RestoreWithBackupOnly_AclEnabled_001, TestSize.Level1)
-{
-    auto kvStore = CreateKVStore(std::string("RestoreBackupStore"), SINGLE_VERSION, false, true, false, false);
-    ASSERT_NE(kvStore, nullptr);
-
-    Status status = kvStore->Restore("backup_only_backup", "/data/service/el1/public/database/SingleStoreImplTest");
-    ASSERT_NE(status, SUCCESS);
-
-    std::string storeDir = "";
-    ASSERT_EQ(DistributedDB::KvStoreDelegateManager::GetDatabaseDir("RestoreBackupStore", storeDir), DBStatus::OK);
-    std::string dbFile = "/data/service/el1/public/database/SingleStoreImplTest/kvdb/" + storeDir +
-        "/single_ver/main/gen_natural_store.db";
-    ASSERT_EQ(access(dbFile.c_str(), F_OK), 0);
-    EXPECT_TRUE(HasServiceAcl(dbFile));
-}
-
-HWTEST_F(SingleStoreImplTest, RestoreWithDumpStackOnly_AclEnabled_001, TestSize.Level1)
-{
-    auto kvStore = CreateKVStore(std::string("RestoreDumpStackStore"), SINGLE_VERSION, false, false, false, true);
-    ASSERT_NE(kvStore, nullptr);
-
-    Status status = kvStore->Restore("dump_stack_backup", "/data/service/el1/public/database/SingleStoreImplTest");
-    ASSERT_NE(status, SUCCESS);
-
-    std::string storeDir = "";
-    ASSERT_EQ(DistributedDB::KvStoreDelegateManager::GetDatabaseDir("RestoreDumpStackStore", storeDir), DBStatus::OK);
-    std::string dbFile = "/data/service/el1/public/database/SingleStoreImplTest/kvdb/" + storeDir +
-        "/single_ver/main/gen_natural_store.db";
-    ASSERT_EQ(access(dbFile.c_str(), F_OK), 0);
-    EXPECT_TRUE(HasServiceAcl(dbFile));
-}
-
 } // namespace OHOS::Test

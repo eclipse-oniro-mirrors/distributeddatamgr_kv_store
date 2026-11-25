@@ -22,7 +22,7 @@
 namespace OHOS::DistributedKv {
 class HmfsTagUtil final {
 public:
-    static constexpr int FLAG_SET = 1;
+    static constexpr int FLAG_SET = 1; /* NOLINT */
 
     static int GetKeyFileFlag(const std::string &path);
 
@@ -31,8 +31,8 @@ public:
     static void ClearDbFileTags(const std::string &dbPath);
 
 private:
-    static constexpr int FLAG_UNSET = 0;
-    static constexpr int MAX_FILE_NAME_LEN = 255;
+    static constexpr int FLAG_UNSET = 0; /* NOLINT */
+    static constexpr int MAX_FILE_NAME_LEN = 255; /* NOLINT */
 
     static bool IsValidFileName(const std::string &fileName);
 

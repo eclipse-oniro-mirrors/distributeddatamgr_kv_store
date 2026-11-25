@@ -25,10 +25,13 @@
 #include <string>
 #include <vector>
 
+#include "acl.h"
 #include "kv_store_delegate_manager.h"
 #include "store_manager.h"
 #include "store_util.h"
 #include "types.h"
+
+using namespace OHOS::DATABASE_UTILS;
 
 namespace {
 constexpr unsigned long HMFS_IOCTL_MAGIC = 0xF5;
@@ -71,6 +74,17 @@ std::string DirOfFd(int fd)
     return std::string(dir, static_cast<size_t>(len));
 }
 
+constexpr int32_t TEST_SERVICE_GID = 3012;
+
+bool HasServiceAcl(const std::string &dbFile)
+{
+    if (dbFile.empty() || access(dbFile.c_str(), F_OK) != 0) {
+        return false;
+    }
+    Acl acl(dbFile, Acl::ACL_XATTR_ACCESS);
+    return acl.HasAccessGroup(TEST_SERVICE_GID, Acl::R_RIGHT | Acl::W_RIGHT | Acl::E_RIGHT);
+}
+
 const std::vector<std::string> &ExpectedFileNames()
 {
     static const std::vector<std::string> fileNames = {
@@ -85,9 +99,9 @@ const std::vector<std::string> &ExpectedFileNames()
 }
 }
 
-extern "C" int __real_ioctl(int fd, unsigned long request, ...);
+extern "C" int __real_ioctl(int fd, unsigned long request, ...); /* NOLINT */
 
-extern "C" int __wrap_ioctl(int fd, unsigned long request, ...)
+extern "C" int __wrap_ioctl(int fd, unsigned long request, ...) /* NOLINT */
 {
     va_list args;
     va_start(args, request);
@@ -243,6 +257,7 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, GetOrOpenStore_ClearBeforeOpen_001, Test
     auto reopenedStore = OpenStore(storeIdName, true, status);
     ASSERT_EQ(status, SUCCESS);
     ASSERT_NE(reopenedStore, nullptr);
+    EXPECT_TRUE(HasServiceAcl(DbFilePath(storeIdName)));
     EXPECT_EQ(gGetPaths, ExpectedPaths(storeIdName));
     EXPECT_EQ(gClearFiles, ExpectedFileNames());
     EXPECT_EQ(gRequests.size(), 12U);
@@ -258,6 +273,7 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, GetOrOpenStore_CacheHitNoClear_001, Test
     auto kvStore = OpenStore(storeIdName, false, status);
     ASSERT_EQ(status, SUCCESS);
     ASSERT_NE(kvStore, nullptr);
+    EXPECT_FALSE(HasServiceAcl(DbFilePath(storeIdName)));
     ResetIoctlState();
     gTaggedFiles = true;
     Status hitStatus = ERROR;
@@ -347,6 +363,7 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_ClearBeforeImport_001, TestSize.
     gTaggedFiles = true;
     Status restoreStatus = kvStore->Restore("not_exist_backup", TEST_BASE_DIR);
     EXPECT_NE(restoreStatus, SUCCESS);
+    EXPECT_TRUE(HasServiceAcl(DbFilePath(storeIdName)));
     EXPECT_EQ(gGetPaths, ExpectedPaths(storeIdName));
     EXPECT_EQ(gClearFiles, ExpectedFileNames());
     EXPECT_EQ(gRequests.size(), 12U);
@@ -404,6 +421,7 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_Backup_ClearBeforeImport_001, Te
     gTaggedFiles = true;
     Status restoreStatus = kvStore->Restore("not_exist_backup", TEST_BASE_DIR);
     EXPECT_NE(restoreStatus, SUCCESS);
+    EXPECT_TRUE(HasServiceAcl(DbFilePath(storeIdName)));
     EXPECT_EQ(gGetPaths, ExpectedPaths(storeIdName));
     EXPECT_EQ(gClearFiles, ExpectedFileNames());
     EXPECT_EQ(gRequests.size(), 12U);
@@ -423,6 +441,7 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_FlagFalse_ClearBeforeImport_001,
     gTaggedFiles = true;
     Status restoreStatus = kvStore->Restore("not_exist_backup", TEST_BASE_DIR);
     EXPECT_NE(restoreStatus, SUCCESS);
+    EXPECT_FALSE(HasServiceAcl(DbFilePath(storeIdName)));
     EXPECT_EQ(gGetPaths, ExpectedPaths(storeIdName));
     EXPECT_EQ(gClearFiles, ExpectedFileNames());
     EXPECT_EQ(gRequests.size(), 12U);

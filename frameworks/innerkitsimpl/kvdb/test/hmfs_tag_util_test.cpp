@@ -108,9 +108,9 @@ std::vector<std::string> ExpectedDbPaths()
 }
 }
 
-extern "C" int __real_ioctl(int fd, unsigned long request, ...);
+extern "C" int __real_ioctl(int fd, unsigned long request, ...); /* NOLINT */
 
-extern "C" int __wrap_ioctl(int fd, unsigned long request, ...)
+extern "C" int __wrap_ioctl(int fd, unsigned long request, ...) /* NOLINT */
 {
     va_list args;
     va_start(args, request);
