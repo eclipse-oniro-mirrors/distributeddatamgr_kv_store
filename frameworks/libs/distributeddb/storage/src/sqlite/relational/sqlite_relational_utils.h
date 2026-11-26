@@ -100,6 +100,9 @@ public:
 
     static int UpdateExistCursor(const TableInfo &tableInfo, const GenLogParam &param);
 
+    // Refresh cursor column for log rows whose cursor is NULL and data_key != -1, and bump meta cursor.
+    static int UpdateNullCursor(sqlite3 *db, const std::string &tableName);
+
     static int GetExistedDataTimeOffset(sqlite3 *db, const std::string &tableName, bool isMem, int64_t &timeOffset);
 
     static std::string GetExtendValue(const TrackerTable &trackerTable);

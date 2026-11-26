@@ -523,8 +523,13 @@ int SQLiteSingleRelationalStorageEngine::SetTrackerTable(const TrackerSchema &sc
     if (errCode != E_OK) {
         return errCode;
     }
+    errCode = ReInitTrackerSchemaFromMeta(handle);
+    if (errCode != E_OK) {
+        (void)handle->Rollback();
+        return errCode;
+    }
     RelationalSchemaObject tracker = GetTrackerSchema();
-    tracker.InsertTrackerSchema(schema);
+    tracker.MergeTrackerSchema(schema);
     int ret = handle->CreateTrackerTable(tracker.GetTrackerTable(schema.tableName), tableInfo, isFirstCreate);
     if (ret != E_OK && ret != -E_WITH_INVENTORY_DATA) {
         (void)handle->Rollback();
@@ -537,9 +542,6 @@ int SQLiteSingleRelationalStorageEngine::SetTrackerTable(const TrackerSchema &sc
         return errCode;
     }
 
-    if (schema.trackerColNames.empty() && !schema.isTrackAction) {
-        tracker.RemoveTrackerSchema(schema);
-    }
     errCode = SaveTrackerSchemaToMetaTable(handle, tracker);
     if (errCode != E_OK) {
         (void)handle->Rollback();
@@ -558,25 +560,32 @@ int SQLiteSingleRelationalStorageEngine::SetTrackerTable(const TrackerSchema &sc
 void SQLiteSingleRelationalStorageEngine::CacheTrackerSchema(const TrackerSchema &schema)
 {
     std::lock_guard lock(trackerSchemaMutex_);
-    trackerSchema_.InsertTrackerSchema(schema);
-    if (!schema.isTrackAction && schema.trackerColNames.empty()) {
-        // if isTrackAction be false and trackerColNames is empty, will remove the tracker schema.
-        trackerSchema_.RemoveTrackerSchema(schema);
-    }
+    trackerSchema_.MergeTrackerSchema(schema);
 }
 
 int SQLiteSingleRelationalStorageEngine::GetOrInitTrackerSchemaFromMeta()
 {
-    RelationalSchemaObject trackerSchema;
     int errCode = E_OK;
     auto *handle = static_cast<SQLiteSingleVerRelationalStorageExecutor *>(FindExecutor(true, OperatePerm::NORMAL_PERM,
         errCode));
     if (handle == nullptr) {
         return errCode;
     }
-    errCode = handle->GetOrInitTrackerSchemaFromMeta(trackerSchema);
+    errCode = ReInitTrackerSchemaFromMeta(handle);
+    ReleaseExecutor(handle);
+    return errCode;
+}
+
+int SQLiteSingleRelationalStorageEngine::ReInitTrackerSchemaFromMeta(
+    SQLiteSingleVerRelationalStorageExecutor *handle)
+{
+    RelationalSchemaObject trackerSchema;
+    auto errCode = handle->GetOrInitTrackerSchemaFromMeta(trackerSchema);
+    if (errCode == -E_NOT_FOUND) {
+        SetTrackerSchema(trackerSchema);
+        return E_OK;
+    }
     if (errCode != E_OK) {
-        ReleaseExecutor(handle);
         return errCode;
     }
     const TableInfoMap tableInfoMap = trackerSchema.GetTrackerTables();
@@ -588,21 +597,18 @@ int SQLiteSingleRelationalStorageEngine::GetOrInitTrackerSchemaFromMeta()
             errCode = CleanTrackerDeviceTable({ trackerTableName }, trackerSchema, handle);
             if (errCode != E_OK) {
                 LOGE("cancel tracker table failed during db opening. %d", errCode);
-                ReleaseExecutor(handle);
                 return errCode;
             }
         } else if (errCode != E_OK) { // LCOV_EXCL_BR_LINE
             LOGE("the tracker schema does not match the tracker schema. %d", errCode);
-            ReleaseExecutor(handle);
             return errCode;
         }
     }
     SetTrackerSchema(trackerSchema);
-    ReleaseExecutor(handle);
     return E_OK;
 }
 
-int SQLiteSingleRelationalStorageEngine::SaveTrackerSchema(const std::string &tableName, bool isFirstCreate)
+int SQLiteSingleRelationalStorageEngine::SaveTrackerSchema(const TrackerSchema &schema, bool isFirstCreate)
 {
     int errCode = E_OK;
     auto *handle = static_cast<SQLiteSingleVerRelationalStorageExecutor *>(FindExecutor(true, OperatePerm::NORMAL_PERM,
@@ -610,14 +616,40 @@ int SQLiteSingleRelationalStorageEngine::SaveTrackerSchema(const std::string &ta
     if (handle == nullptr) {
         return errCode;
     }
-    RelationalSchemaObject tracker = GetTrackerSchema();
-    errCode = SaveTrackerSchemaToMetaTable(handle, tracker);
-    if (errCode != E_OK || !isFirstCreate) {
-        ReleaseExecutor(handle);
+    ResFinalizer finalizer([&handle, this] { this->ReleaseExecutor(handle); });
+    errCode = handle->StartTransaction(TransactType::IMMEDIATE);
+    if (errCode != E_OK) {
         return errCode;
     }
-    errCode = handle->CheckInventoryData(DBCommon::GetLogTableName(tableName));
-    ReleaseExecutor(handle);
+    errCode = ReInitTrackerSchemaFromMeta(handle);
+    if (errCode != E_OK) {
+        (void)handle->Rollback();
+        return errCode;
+    }
+    RelationalSchemaObject tracker = GetTrackerSchema();
+    tracker.MergeTrackerSchema(schema);
+    errCode = SaveTrackerSchemaToMetaTable(handle, tracker);
+    if (errCode != E_OK) {
+        (void)handle->Rollback();
+        return errCode;
+    }
+    if (!isFirstCreate) {
+        errCode = handle->Commit();
+        if (errCode == E_OK) {
+            SetTrackerSchema(tracker);
+        }
+        return errCode;
+    }
+    errCode = handle->CheckInventoryData(DBCommon::GetLogTableName(schema.tableName));
+    if (errCode != E_OK && errCode != -E_WITH_INVENTORY_DATA) {
+        (void)handle->Rollback();
+        return errCode;
+    }
+    auto ret = handle->Commit();
+    if (ret != E_OK) {
+        return ret;
+    }
+    SetTrackerSchema(tracker);
     return errCode;
 }
 

@@ -252,9 +252,9 @@ protected:
     void CleanDirtyLogIfNeed(const std::string &tableName) const;
 
     void TrackerIntegrityRepair(const TrackerSchema &trackerSchema, const TableInfo &tableInfo,
-        bool isNoTableInSchema);
+        bool isNoTableInSchema) const;
 
-    void TrackerRepairImpl(TrackerTable &trackerTable, const RelationalSchemaObject &obj);
+    void TrackerRepairImpl(TrackerTable &trackerTable, const RelationalSchemaObject &obj) const;
 
     RelationalSchemaObject GetSchemaObj() const;
 

@@ -17,6 +17,7 @@
 
 #include <utility>
 
+#include "cloud/cloud_storage_utils.h"
 #include "data_donation_utils.h"
 
 namespace DistributedDB {
@@ -363,6 +364,132 @@ int SQLiteRelationalStore::QuerySubscribeOutput(
         return -E_INVALID_DB;
     }
     return sqliteStorageEngine_->QuerySubscribeOutput(cursorIn, cursorOut, dataOut);
+}
+
+void SQLiteRelationalStore::CleanDirtyLogIfNeed(const std::string &tableName) const
+{
+    int errCode = E_OK;
+    SQLiteSingleVerRelationalStorageExecutor *handle = GetHandle(true, errCode);
+    if (handle == nullptr) {
+        LOGW("[RDBStore][ClearDirtyLog] Get handle failed %d", errCode);
+        return;
+    }
+    ResFinalizer finalizer([this, handle]() {
+        SQLiteSingleVerRelationalStorageExecutor *releaseHandle = handle;
+        ReleaseHandle(releaseHandle);
+    });
+    sqlite3 *db = nullptr;
+    errCode = handle->GetDbHandle(db);
+    if (errCode != E_OK) {
+        LOGW("[RDBStore][ClearDirtyLog] Get db handle failed %d", errCode);
+        return;
+    }
+    bool isExistDirtyLog = false;
+    std::tie(errCode, isExistDirtyLog) = SQLiteRelationalUtils::CheckExistDirtyLog(db, tableName);
+    if (errCode != E_OK) {
+        LOGW("[RDBStore][ClearDirtyLog] Check dirty log failed %d", errCode);
+        return;
+    }
+    if (!isExistDirtyLog) {
+        return;
+    }
+    auto obj = GetSchemaObj();
+    if (!obj.IsSchemaValid()) {
+        return;
+    }
+    errCode = SQLiteRelationalUtils::CleanDirtyLog(db, tableName, obj);
+    if (errCode != E_OK) {
+        LOGW("[RDBStore][ClearDirtyLog] Clean dirty log failed %d", errCode);
+    }
+}
+
+RelationalSchemaObject SQLiteRelationalStore::GetSchemaObj() const
+{
+    if (storageEngine_ == nullptr) {
+        return {};
+    }
+    return storageEngine_->GetSchemaInfo();
+}
+
+void SQLiteRelationalStore::TrackerIntegrityRepair(const TrackerSchema &trackerSchema,
+    const TableInfo &tableInfo, bool isNoTableInSchema) const
+{
+    int errCode = E_OK;
+    auto *handle = GetHandle(false, errCode);
+    if (handle == nullptr) {
+        LOGW("[TrackerIntegrityRepair] get read handle failed:%d", errCode);
+        return;
+    }
+    sqlite3 *dbHandle = nullptr;
+    if (handle->GetDbHandle(dbHandle) != E_OK) {
+        ReleaseHandle(handle);
+        return;
+    }
+    TrackerTable trackerTable = tableInfo.GetTrackerTable();
+    trackerTable.CheckMissingTrigger(tableInfo, dbHandle);
+    // Check whether cursor exists in meta table, init it later in TrackerRepairImpl if absent.
+    trackerTable.CheckMissingCursor(dbHandle, handle->IsMemory());
+    // Check whether any log row has a null cursor, refresh it later in TrackerRepairImpl if so.
+    trackerTable.CheckNullCursorLog(dbHandle);
+    // Try clear historical mismatched log, which usually do not occur and apply to tracker table only.
+    if (isNoTableInSchema) {
+        trackerTable.CheckMismatchedDataKeys(dbHandle);
+    }
+    if (!trackerSchema.extendColNames.empty()) {
+        trackerTable.CheckNullExtendLog(dbHandle);
+    }
+    auto obj = GetSchemaObj();
+    if (obj.IsSchemaValid()) {
+        trackerTable.CheckExistDirtyLog(dbHandle);
+    }
+    ReleaseHandle(handle);
+    LOGI("[TrackerIntegrityRepair] check finish [%s length[%zu]]",
+        DBCommon::StringMiddleMasking(trackerSchema.tableName).c_str(), trackerSchema.tableName.length());
+    TrackerRepairImpl(trackerTable, obj);
+}
+
+void SQLiteRelationalStore::TrackerRepairImpl(TrackerTable &trackerTable, const RelationalSchemaObject &obj) const
+{
+    trackerTable.Repair([this, &obj] (const TrackerTable::RepairInfo &repairInfo, const std::string &tableName,
+        const std::set<std::string> &extendColNames) {
+        int errCode = E_OK;
+        auto handle = GetHandle(true, errCode);
+        if (handle == nullptr) {
+            LOGW("[TrackerIntegrityRepair] get write handle failed:%d", errCode);
+            return;
+        }
+        sqlite3 *db = nullptr;
+        if (handle->GetDbHandle(db) != E_OK) {
+            ReleaseHandle(handle);
+            return;
+        }
+        if (repairInfo.missingCursor) {
+            int cursorErr = SQLiteUtils::ExecuteRawSQL(db, CloudStorageUtils::GetCursorUpgradeSql(tableName));
+            LOGW("[TrackerIntegrityRepair] recover cursor to meta errCode=%d", cursorErr);
+        }
+        for (const auto &sql : repairInfo.createTriggerSqls) {
+            errCode = SQLiteUtils::ExecuteRawSQL(db, sql);
+            if (errCode != E_OK) {
+                LOGW("[%s [%zu]] Failed to recreate trigger, errCode=%d",
+                    DBCommon::StringMiddleMasking(tableName).c_str(), tableName.size(), errCode);
+            }
+        }
+        if (!repairInfo.misDataKeys.empty()) {
+            SQLiteRelationalUtils::DeleteMismatchLog(db, tableName, repairInfo.misDataKeys);
+        }
+        if (repairInfo.existNullExtend) {
+            handle->RecoverNullExtendLog(tableName, extendColNames,
+                SQLiteRelationalUtils::GetTempUpdateLogCursorTriggerSql(tableName));
+        }
+        if (repairInfo.existDirtyLog) {
+            (void) SQLiteRelationalUtils::CleanDirtyLog(db, tableName, obj);
+        }
+        if (repairInfo.existNullCursorLog) {
+            (void) SQLiteRelationalUtils::UpdateNullCursor(db, tableName);
+        }
+        ReleaseHandle(handle);
+        LOGI("[TrackerIntegrityRepair] repair finish");
+    });
 }
 } // namespace DistributedDB
 #endif

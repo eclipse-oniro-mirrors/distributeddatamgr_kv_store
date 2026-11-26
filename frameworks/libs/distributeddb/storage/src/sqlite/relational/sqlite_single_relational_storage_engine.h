@@ -76,7 +76,8 @@ public:
     int SetTrackerTable(const TrackerSchema &schema, const TableInfo &tableInfo, bool isFirstCreate);
     void CacheTrackerSchema(const TrackerSchema &schema);
     int GetOrInitTrackerSchemaFromMeta();
-    int SaveTrackerSchema(const std::string &tableName, bool isFirstCreate);
+    int ReInitTrackerSchemaFromMeta(SQLiteSingleVerRelationalStorageExecutor *handle);
+    int SaveTrackerSchema(const TrackerSchema &schema, bool isFirstCreate);
 
     int ExecuteSql(const SqlCondition &condition, std::vector<VBucket> &records);
     int QuerySubscribeOutput(const DBSubscribeCursor &cursorIn,
