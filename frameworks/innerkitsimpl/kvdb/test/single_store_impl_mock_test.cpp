@@ -16,6 +16,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -38,6 +39,7 @@
 #include "single_store_impl.h"
 #include "store_factory.h"
 #include "store_manager.h"
+#include "store_util.h"
 
 namespace OHOS::DistributedKv {
 using namespace std;
@@ -51,6 +53,18 @@ namespace {
 constexpr int WAIT_POLL_INTERVAL_MS = 10;
 constexpr int SHRINK_WAIT_TIMEOUT_MS = 5000;
 constexpr int32_t MOCK_PAGE_SIZE = 4;
+constexpr size_t DB_FILE_COUNT = 9;
+constexpr uint64_t PENDING_TASK_ID = 1;
+constexpr const char *ACL_TEST_ROOT_DIR = "/data/service/el1/public/database/SingleStoreImplTest";
+constexpr const char *UNMANAGED_ACL_BASE_DIR = "/data/local/tmp/single_store_impl_acl";
+
+struct ShrinkStoreConfig {
+    KvStoreType type = KvStoreType::LOCAL_ONLY;
+    bool isPublic = false;
+    bool syncable = false;
+    bool backup = false;
+    bool dumpStackOnFileDeletion = false;
+};
 
 struct ShrinkState {
     bool desired = true;
@@ -77,6 +91,24 @@ bool WaitShrinkState(const std::shared_ptr<SingleStoreImpl> &store, bool desired
     }
     auto state = GetShrinkState(store);
     return state.desired == desired && state.pending == pending;
+}
+
+std::string BuildAclTestDir(const std::string &name)
+{
+    return std::string(ACL_TEST_ROOT_DIR) + "/" + name;
+}
+
+bool CreateTestDirs(const std::string &path)
+{
+    std::error_code error;
+    (void)std::filesystem::create_directories(path, error);
+    return std::filesystem::is_directory(path, error);
+}
+
+void RemoveTestDirs(const std::string &path)
+{
+    std::error_code error;
+    (void)std::filesystem::remove_all(path, error);
 }
 } // namespace
 
@@ -161,7 +193,8 @@ public:
     }
     DBStatus Import(const std::string &, const DistributedDB::CipherPassword &, bool) override
     {
-        return DBStatus::NOT_SUPPORT;
+        importCalls_++;
+        return importStatus_;
     }
     DBStatus StartTransaction() override { return DBStatus::NOT_SUPPORT; }
     DBStatus Commit() override { return DBStatus::NOT_SUPPORT; }
@@ -198,6 +231,11 @@ public:
         statusQueue_.push(status);
     }
 
+    void SetImportStatus(DBStatus status)
+    {
+        importStatus_ = status;
+    }
+
     bool WaitSetCalls(int expected)
     {
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -224,9 +262,11 @@ public:
 
     std::atomic<int> setCalls_ { 0 };
     std::atomic<int> pageSizeCalls_ { 0 };
+    std::atomic<int> importCalls_ { 0 };
     std::atomic<bool> actual_ { false };
 
 private:
+    DBStatus importStatus_ = DBStatus::NOT_SUPPORT;
     bool blocked_ = false;
     std::mutex gateMutex_;
     std::condition_variable gateCondition_;
@@ -234,18 +274,17 @@ private:
 };
 
 std::shared_ptr<SingleStoreImpl> CreateShrinkStore(const std::shared_ptr<ShrinkMockDelegate> &delegate,
-    Convertor &convertor, KvStoreType type = KvStoreType::LOCAL_ONLY, bool isPublic = false, bool syncable = false,
-    bool backup = false, bool dumpStackOnFileDeletion = false)
+    Convertor &convertor, const ShrinkStoreConfig &config = ShrinkStoreConfig())
 {
     Options options;
-    options.kvStoreType = type;
-    options.isPublic = isPublic;
+    options.kvStoreType = config.type;
+    options.isPublic = config.isPublic;
     options.securityLevel = S2;
     options.area = EL1;
-    options.baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
-    options.backup = backup;
-    options.syncable = syncable;
-    options.dumpStackOnFileDeletion = dumpStackOnFileDeletion;
+    options.baseDir = ACL_TEST_ROOT_DIR;
+    options.backup = config.backup;
+    options.syncable = config.syncable;
+    options.dumpStackOnFileDeletion = config.dumpStackOnFileDeletion;
     AppId appId = { "SingleStoreImplTest" };
     return std::make_shared<SingleStoreImpl>(delegate, appId, options, convertor);
 }
@@ -1804,7 +1843,7 @@ HWTEST_F(SingleStoreImplMockTest, IsPublicLocalOnlyNotSupported, testing::ext::T
 {
     auto delegate = std::make_shared<ShrinkMockDelegate>();
     Convertor convertor;
-    auto store = CreateShrinkStore(delegate, convertor, KvStoreType::LOCAL_ONLY, true);
+    auto store = CreateShrinkStore(delegate, convertor, { KvStoreType::LOCAL_ONLY, true });
     ASSERT_NE(store, nullptr);
     EXPECT_EQ(store->SetShrinkEnable(true), NOT_SUPPORT);
     EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
@@ -1830,13 +1869,13 @@ HWTEST_F(SingleStoreImplMockTest, LocalOnlyFallbackAccepted, testing::ext::TestS
     EXPECT_EQ(store->Close(true), 0);
 }
 
-HWTEST_F(SingleStoreImplMockTest, NonLocalOnlyTypesNotSupported, testing::ext::TestSize.Level1)
+HWTEST_F(SingleStoreImplMockTest, NonLocalOnlyTypesNotSupported, testing::ext::TestSize.Level0)
 {
     const std::vector<KvStoreType> types = { KvStoreType::SINGLE_VERSION, KvStoreType::DEVICE_COLLABORATION };
     for (auto type : types) {
         auto delegate = std::make_shared<ShrinkMockDelegate>();
         Convertor convertor;
-        auto store = CreateShrinkStore(delegate, convertor, type);
+        auto store = CreateShrinkStore(delegate, convertor, { type });
         ASSERT_NE(store, nullptr);
         EXPECT_EQ(store->SetShrinkEnable(true), NOT_SUPPORT);
         EXPECT_EQ(store->SetShrinkEnable(false), SUCCESS);
@@ -1864,21 +1903,20 @@ HWTEST_F(SingleStoreImplMockTest, DefaultSetShrinkEnableContract, testing::ext::
  */
 HWTEST_F(SingleStoreImplMockTest, Constructor_DumpStackOptionMatrix_ReturnsStore, testing::ext::TestSize.Level0)
 {
-    const bool optionMatrix[][3] = {
-        { true, false, false },
-        { false, true, false },
-        { false, false, true },
-        { false, false, false },
+    const ShrinkStoreConfig optionMatrix[] = {
+        { KvStoreType::LOCAL_ONLY, false, true, false, false },
+        { KvStoreType::LOCAL_ONLY, false, false, true, false },
+        { KvStoreType::LOCAL_ONLY, false, false, false, true },
+        { KvStoreType::LOCAL_ONLY, false, false, false, false },
     };
-    for (const auto &flags : optionMatrix) {
+    for (const auto &config : optionMatrix) {
         auto delegate = std::make_shared<ShrinkMockDelegate>();
         Convertor convertor;
-        auto store =
-            CreateShrinkStore(delegate, convertor, KvStoreType::LOCAL_ONLY, false, flags[0], flags[1], flags[2]);
+        auto store = CreateShrinkStore(delegate, convertor, config);
         ASSERT_NE(store, nullptr);
-        EXPECT_EQ(store->syncable_, flags[0]);
-        EXPECT_EQ(store->autoBackup_, flags[1]);
-        EXPECT_EQ(store->dumpStackOnFileDeletion_, flags[2]);
+        EXPECT_EQ(store->syncable_, config.syncable);
+        EXPECT_EQ(store->autoBackup_, config.backup);
+        EXPECT_EQ(store->dumpStackOnFileDeletion_, config.dumpStackOnFileDeletion);
     }
 }
 
@@ -1890,21 +1928,124 @@ HWTEST_F(SingleStoreImplMockTest, Constructor_DumpStackOptionMatrix_ReturnsStore
  */
 HWTEST_F(SingleStoreImplMockTest, Restore_DumpStackOptionMatrix_ReturnsInvalidArgument, testing::ext::TestSize.Level0)
 {
-    EXPECT_CALL(*kVDBServiceClientMock, GetInstance()).WillRepeatedly(Return(nullptr));
-    const bool optionMatrix[][3] = {
-        { true, false, false },
-        { false, true, false },
-        { false, false, true },
-        { false, false, false },
+    std::shared_ptr<KVDBServiceClient> service = std::make_shared<KVDBServiceClient>(nullptr);
+    ASSERT_NE(service, nullptr);
+    const ShrinkStoreConfig optionMatrix[] = {
+        { KvStoreType::LOCAL_ONLY, false, true, false, false },
+        { KvStoreType::LOCAL_ONLY, false, false, true, false },
+        { KvStoreType::LOCAL_ONLY, false, false, false, true },
+        { KvStoreType::LOCAL_ONLY, false, false, false, false },
     };
-    for (const auto &flags : optionMatrix) {
-        auto delegate = std::make_shared<ShrinkMockDelegate>();
-        Convertor convertor;
-        auto store =
-            CreateShrinkStore(delegate, convertor, KvStoreType::LOCAL_ONLY, false, flags[0], flags[1], flags[2]);
-        ASSERT_NE(store, nullptr);
-        EXPECT_EQ(store->Restore("missing_dump_stack_backup", "/data/service/el1/public/database/SingleStoreImplTest"),
-            INVALID_ARGUMENT);
+    for (const auto &config : optionMatrix) {
+        for (bool serviceAvailable : { false, true }) {
+            auto delegate = std::make_shared<ShrinkMockDelegate>();
+            Convertor convertor;
+            auto store = CreateShrinkStore(delegate, convertor, config);
+            ASSERT_NE(store, nullptr);
+            if (serviceAvailable) {
+                EXPECT_CALL(*kVDBServiceClientMock, GetInstance()).WillOnce(Return(service));
+            } else {
+                EXPECT_CALL(*kVDBServiceClientMock, GetInstance()).WillOnce(Return(nullptr));
+            }
+            Status status = store->Restore("missing_dump_stack_backup", ACL_TEST_ROOT_DIR);
+            EXPECT_EQ(status, INVALID_ARGUMENT);
+        }
     }
+}
+
+HWTEST_F(SingleStoreImplMockTest, Restore_ExistingBackup_ReturnsSuccess, testing::ext::TestSize.Level0)
+{
+    const std::string baseDir = BuildAclTestDir("restore_success");
+    RemoveTestDirs(baseDir);
+    ASSERT_TRUE(CreateTestDirs(baseDir + "/kvdb/backup/shrink_mock"));
+    ASSERT_TRUE(StoreUtil::CreateFile(baseDir + "/kvdb/backup/shrink_mock/success.bak"));
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    delegate->SetImportStatus(DBStatus::OK);
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    std::shared_ptr<KVDBServiceClient> service = std::make_shared<KVDBServiceClient>(nullptr);
+    EXPECT_CALL(*kVDBServiceClientMock, GetInstance()).WillOnce(Return(service));
+    Status status = store->Restore("success", baseDir);
+    EXPECT_EQ(status, SUCCESS);
+    EXPECT_EQ(delegate->importCalls_.load(), 1);
+    RemoveTestDirs(baseDir);
+}
+
+HWTEST_F(SingleStoreImplMockTest, SetAcl_ExistingDbFiles_AppliesServiceAclToAll, testing::ext::TestSize.Level0)
+{
+    const std::string baseDir = BuildAclTestDir("acl_complete");
+    RemoveTestDirs(baseDir);
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    StoreId aclStoreId = { "acl_complete" };
+    const std::string fullPath = StoreUtil::GetStoreDir(baseDir, aclStoreId.storeId);
+    auto dbFiles = store->GenerateDbFiles(fullPath);
+    ASSERT_EQ(dbFiles.size(), DB_FILE_COUNT);
+    for (const auto &dbFile : dbFiles) {
+        ASSERT_TRUE(CreateTestDirs(dbFile));
+    }
+    store->SetAcl(aclStoreId.storeId, baseDir);
+    for (const auto &dbFile : dbFiles) {
+        EXPECT_TRUE(StoreUtil::IsFileExist(dbFile));
+    }
+    RemoveTestDirs(baseDir);
+}
+
+HWTEST_F(SingleStoreImplMockTest, SetAcl_MissingSubDir_ReturnsBeforeDbFileAcl, testing::ext::TestSize.Level0)
+{
+    const std::string baseDir = BuildAclTestDir("acl_missing");
+    RemoveTestDirs(baseDir);
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    StoreId aclStoreId = { "acl_missing" };
+    EXPECT_TRUE(StoreUtil::IsFileExist(ACL_TEST_ROOT_DIR));
+    EXPECT_FALSE(StoreUtil::IsFileExist(baseDir));
+    store->SetAcl(aclStoreId.storeId, baseDir);
+    EXPECT_FALSE(StoreUtil::IsFileExist(StoreUtil::GetStoreDir(baseDir, aclStoreId.storeId)));
+}
+
+HWTEST_F(SingleStoreImplMockTest, SetAcl_MissingMainDbFile_ReturnsBeforeRemaining, testing::ext::TestSize.Level0)
+{
+    const std::string baseDir = UNMANAGED_ACL_BASE_DIR;
+    RemoveTestDirs(baseDir);
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    StoreId aclStoreId = { "acl_unmanaged" };
+    auto dbFiles = store->GenerateDbFiles(StoreUtil::GetStoreDir(baseDir, aclStoreId.storeId));
+    ASSERT_EQ(dbFiles.size(), DB_FILE_COUNT);
+    EXPECT_FALSE(StoreUtil::IsFileExist(dbFiles.front()));
+    store->SetAcl(aclStoreId.storeId, baseDir);
+    EXPECT_FALSE(StoreUtil::IsFileExist(dbFiles.front()));
+}
+
+HWTEST_F(SingleStoreImplMockTest, GenerateDbFiles_EmptyAndNonEmpty_ReturnsCount, testing::ext::TestSize.Level0)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    EXPECT_TRUE(store->GenerateDbFiles("").empty());
+    const std::string fullPath = StoreUtil::GetStoreDir(ACL_TEST_ROOT_DIR, "acl_generate");
+    auto dbFiles = store->GenerateDbFiles(fullPath);
+    ASSERT_EQ(dbFiles.size(), DB_FILE_COUNT);
+    EXPECT_EQ(dbFiles.front(), fullPath + "/main");
+}
+
+HWTEST_F(SingleStoreImplMockTest, Destructor_PendingTaskId_RemovesTask, testing::ext::TestSize.Level0)
+{
+    auto delegate = std::make_shared<ShrinkMockDelegate>();
+    Convertor convertor;
+    auto store = CreateShrinkStore(delegate, convertor);
+    ASSERT_NE(store, nullptr);
+    store->taskId_ = PENDING_TASK_ID;
+    EXPECT_EQ(store->taskId_.load(), PENDING_TASK_ID);
+    store.reset();
 }
 } // namespace OHOS::DistributedKv

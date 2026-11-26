@@ -18,6 +18,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdarg>
 #include <cstdint>
@@ -31,6 +32,13 @@ namespace {
 constexpr unsigned long HMFS_IOCTL_MAGIC = 0xF5;
 constexpr const char *TEST_BASE_DIR = "/data/service/el1/public/database/HmfsTagUtilTest";
 constexpr const char *TEST_FILE_NAME = "file.db";
+constexpr const char *MISSING_RELATIVE_PATH = "hmfs_missing_dir_001/file.db";
+constexpr const char *MISSING_PROBE_FILE = "hmfs_missing_probe.db";
+constexpr uint32_t FLAG_SET_VALUE = 1;
+constexpr size_t EXPECTED_GET_COUNT = 2;
+constexpr size_t EXPECTED_CLEAR_COUNT = 1;
+constexpr size_t EXPECTED_DB_FILE_COUNT = 3;
+constexpr size_t EXPECTED_MIXED_IOCTL_COUNT = 4;
 
 struct HmfsKeyFileArgs {
     char filename[256];
@@ -44,8 +52,10 @@ std::vector<std::string> gGetFiles;
 std::vector<std::string> gGetPaths;
 std::vector<std::string> gClearFiles;
 std::vector<std::string> gRequests;
+std::vector<std::string> gTaggedFileNames;
 bool gTaggedFiles = false;
 bool gIoctlFail = false;
+int gLastIoctlErrno = 0;
 
 void ResetIoctlState()
 {
@@ -53,8 +63,10 @@ void ResetIoctlState()
     gGetPaths.clear();
     gClearFiles.clear();
     gRequests.clear();
+    gTaggedFileNames.clear();
     gTaggedFiles = false;
     gIoctlFail = false;
+    gLastIoctlErrno = 0;
 }
 
 std::string DirOfFd(int fd)
@@ -80,11 +92,6 @@ std::string TestDir()
 
 std::string DbDir()
 {
-    std::error_code error;
-    std::filesystem::path fdPath = std::filesystem::canonical("/proc/self/fd", error);
-    if (!error) {
-        return fdPath.string();
-    }
     return TestDir() + "/single_ver";
 }
 
@@ -129,12 +136,15 @@ extern "C" int __wrap_ioctl(int fd, unsigned long request, ...) /* NOLINT */
     gRequests.push_back(fileName);
     if (gIoctlFail) {
         errno = EACCES;
+        gLastIoctlErrno = errno;
         return -1;
     }
     if (cmd == HMFS_GET_FLAGS) {
         gGetFiles.push_back(fileName);
         gGetPaths.push_back(DirOfFd(fd) + "/" + fileName);
-        hmfsArgs->flags = gTaggedFiles ? 1 : 0;
+        bool tagged = gTaggedFiles ||
+            std::find(gTaggedFileNames.begin(), gTaggedFileNames.end(), fileName) != gTaggedFileNames.end();
+        hmfsArgs->flags = tagged ? 1 : 0;
         return 0;
     }
     gClearFiles.push_back(fileName);
@@ -241,6 +251,26 @@ HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ExecuteIoctl_IoctlFail_001, TestSize.Level
     (void)close(dirFd);
 }
 
+HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ExecuteIoctl_CurrentDirFd_001, TestSize.Level0)
+{
+    int dirFd = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    ASSERT_GE(dirFd, 0);
+    EXPECT_EQ(HmfsTagUtil::ExecuteIoctl(dirFd, HMFS_GET_FLAGS, "", nullptr), -EINVAL);
+    uint32_t flags = 0;
+    gTaggedFiles = true;
+    EXPECT_EQ(HmfsTagUtil::ExecuteIoctl(dirFd, HMFS_GET_FLAGS, TEST_FILE_NAME, &flags), 0);
+    EXPECT_EQ(flags, FLAG_SET_VALUE);
+    gTaggedFiles = false;
+    EXPECT_EQ(HmfsTagUtil::ExecuteIoctl(dirFd, HMFS_GET_FLAGS, TEST_FILE_NAME, &flags), 0);
+    EXPECT_EQ(flags, 0U);
+    EXPECT_EQ(HmfsTagUtil::ExecuteIoctl(dirFd, HMFS_CLEAR_FLAGS, TEST_FILE_NAME, nullptr), 0);
+    EXPECT_EQ(gGetFiles.size(), EXPECTED_GET_COUNT);
+    EXPECT_EQ(gGetFiles[0], TEST_FILE_NAME);
+    EXPECT_EQ(gClearFiles.size(), EXPECTED_CLEAR_COUNT);
+    EXPECT_EQ(gClearFiles[0], TEST_FILE_NAME);
+    (void)close(dirFd);
+}
+
 HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ExecuteByPath_InvalidPath_001, TestSize.Level0)
 {
     EXPECT_EQ(HmfsTagUtil::ExecuteByPath(HMFS_GET_FLAGS, "", nullptr), -EINVAL);
@@ -257,6 +287,15 @@ HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ExecuteByPath_OpenFail_001, TestSize.Level
 {
     std::string path = TestDir() + "/not_exist_dir/" + TEST_FILE_NAME;
     EXPECT_EQ(HmfsTagUtil::ExecuteByPath(HMFS_GET_FLAGS, path, nullptr), -ENOENT);
+    EXPECT_TRUE(gRequests.empty());
+    EXPECT_TRUE(gGetFiles.empty());
+    EXPECT_TRUE(gClearFiles.empty());
+}
+
+HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ExecuteByPath_OpenFailRelative_001, TestSize.Level0)
+{
+    EXPECT_EQ(HmfsTagUtil::ExecuteByPath(HMFS_GET_FLAGS, MISSING_RELATIVE_PATH, nullptr), -ENOENT);
+    EXPECT_EQ(HmfsTagUtil::ExecuteByPath(HMFS_CLEAR_FLAGS, MISSING_RELATIVE_PATH, nullptr), -ENOENT);
     EXPECT_TRUE(gRequests.empty());
     EXPECT_TRUE(gGetFiles.empty());
     EXPECT_TRUE(gClearFiles.empty());
@@ -288,6 +327,18 @@ HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_GetKeyFileFlag_001, TestSize.Level0)
     EXPECT_EQ(HmfsTagUtil::GetKeyFileFlag(path), -EACCES);
     EXPECT_EQ(gRequests.size(), 3U);
     EXPECT_EQ(gGetFiles.size(), 2U);
+}
+
+HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_GetKeyFileFlag_IoctlError_001, TestSize.Level0)
+{
+    int dirFd = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    ASSERT_GE(dirFd, 0);
+    gIoctlFail = true;
+    EXPECT_EQ(HmfsTagUtil::GetKeyFileFlag(dirFd, TEST_FILE_NAME), -EACCES);
+    EXPECT_EQ(HmfsTagUtil::GetKeyFileFlag(TestDir() + "/" + TEST_FILE_NAME), -EACCES);
+    EXPECT_EQ(gRequests.size(), EXPECTED_GET_COUNT);
+    EXPECT_TRUE(gGetFiles.empty());
+    (void)close(dirFd);
 }
 
 HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ClearKeyFileFlag_001, TestSize.Level0)
@@ -336,6 +387,18 @@ HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ClearDbFileTags_TaggedAndUntagged_001, Tes
     EXPECT_EQ(gRequests.size(), 3U);
 }
 
+HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ClearDbFileTags_MixedTag_001, TestSize.Level0)
+{
+    std::string dbPath = DbDir() + "/clear_tags.db";
+    gTaggedFileNames = { "clear_tags.db-wal" };
+    HmfsTagUtil::ClearDbFileTags(dbPath);
+    EXPECT_EQ(gGetFiles, ExpectedDbFileNames());
+    EXPECT_EQ(gGetPaths, ExpectedDbPaths());
+    EXPECT_EQ(gClearFiles.size(), EXPECTED_CLEAR_COUNT);
+    EXPECT_EQ(gClearFiles[0], "clear_tags.db-wal");
+    EXPECT_EQ(gRequests.size(), EXPECTED_MIXED_IOCTL_COUNT);
+}
+
 HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ClearDbFileTags_IoctlFail_001, TestSize.Level0)
 {
     std::string dbPath = DbDir() + "/clear_tags.db";
@@ -358,10 +421,20 @@ HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ClearDbFileTags_InvalidPath_001, TestSize.
 
 HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ClearDbFileTags_ErrnoPreserved_001, TestSize.Level0)
 {
-    std::string dbPath = TestDir() + "/not_exist_dir/" + TEST_FILE_NAME;
-    errno = EAGAIN;
-    HmfsTagUtil::ClearDbFileTags(dbPath);
-    EXPECT_EQ(errno, EAGAIN);
-    EXPECT_TRUE(gRequests.empty());
+    std::string probePath = TestDir() + "/" + MISSING_PROBE_FILE;
+    int probeFd = open(probePath.c_str(), O_RDONLY | O_CLOEXEC);
+    if (probeFd >= 0) {
+        (void)close(probeFd);
+    }
+    ASSERT_EQ(probeFd, -1);
+    const int expectedErrno = errno;
+    ASSERT_TRUE(expectedErrno != 0);
+    gIoctlFail = true;
+    HmfsTagUtil::ClearDbFileTags(DbDir() + "/" + TEST_FILE_NAME);
+    EXPECT_EQ(gLastIoctlErrno, EACCES);
+    EXPECT_EQ(errno, expectedErrno);
+    EXPECT_EQ(gRequests.size(), EXPECTED_DB_FILE_COUNT);
+    EXPECT_TRUE(gGetFiles.empty());
+    EXPECT_TRUE(gClearFiles.empty());
 }
 }

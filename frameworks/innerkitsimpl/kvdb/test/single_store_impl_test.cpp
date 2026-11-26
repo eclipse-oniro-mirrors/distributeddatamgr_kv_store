@@ -92,6 +92,7 @@ public:
     std::shared_ptr<SingleKvStore> kvStore_;
     static inline std::shared_ptr<StoreFactory> storeFactory = nullptr;
     static constexpr int MAX_RESULTSET_SIZE = 8;
+    static constexpr size_t DB_FILE_COUNT = 9;
 };
 
 void SingleStoreImplTest::SetUpTestCase(void)
@@ -2023,6 +2024,8 @@ HWTEST_F(SingleStoreImplTest, GenerateDbFiles, TestSize.Level0)
     kvStore->SetAcl(storeId, "");
     auto res = kvStore->GenerateDbFiles("");
     ASSERT_EQ(res.size(), 0);
+    auto dbFiles = kvStore->GenerateDbFiles("/data/service/el1/public/database/SingleStoreImplTest/");
+    ASSERT_EQ(dbFiles.size(), DB_FILE_COUNT);
 }
 
 /**
