@@ -64,6 +64,11 @@ public:
     {
         return OK;
     }
+
+    virtual ErrorDetail GetErrorDetail() const
+    {
+        return {0, ""};
+    }
 };
 } // namespace DistributedDB
 

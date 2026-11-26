@@ -201,14 +201,17 @@ HWTEST_F(DistributedDBCloudDBProxyTest, CloudDBProxyTest002, TestSize.Level0)
     std::vector<VBucket> expectRecords = CloudDBDataUtils::GenerateRecords(10, schema); // generate 10 records
     std::vector<VBucket> expectExtends = CloudDBDataUtils::GenerateExtends(10); // generate 10 extends
     Info uploadInfo;
-    std::vector<VBucket> insert = expectRecords;
+    CloudSyncBatch batch;
+    batch.record = expectRecords;
+    batch.extend = expectExtends;
     uint32_t retryCount = 0;
-    EXPECT_EQ(proxy.BatchInsert(TABLE_NAME, insert, expectExtends, uploadInfo, retryCount), E_OK);
+    ErrorDetail detail;
+    EXPECT_EQ(proxy.BatchInsert(TABLE_NAME, batch, uploadInfo, retryCount, detail), E_OK);
 
     VBucket extend;
     extend[CloudDbConstant::CURSOR_FIELD] = std::string("");
     std::vector<VBucket> actualRecords;
-    EXPECT_EQ(proxy.Query(TABLE_NAME, extend, actualRecords), -E_QUERY_END);
+    EXPECT_EQ(proxy.Query(TABLE_NAME, extend, actualRecords, detail), -E_QUERY_END);
     /**
      * @tc.steps: step3. proxy query data
      * @tc.expected: step3. data is equal to expect
@@ -255,16 +258,19 @@ HWTEST_F(DistributedDBCloudDBProxyTest, CloudDBProxyTest003, TestSize.Level0)
     std::vector<VBucket> expectRecords = CloudDBDataUtils::GenerateRecords(10, schema); // generate 10 records
     std::vector<VBucket> expectExtends = CloudDBDataUtils::GenerateExtends(10); // generate 10 extends
     Info uploadInfo;
-    std::vector<VBucket> insert = expectRecords;
+    CloudSyncBatch batch;
+    batch.record = expectRecords;
+    batch.extend = expectExtends;
     uint32_t retryCount = 0;
-    EXPECT_EQ(proxy.BatchInsert(TABLE_NAME, insert, expectExtends, uploadInfo, retryCount), E_OK);
+    ErrorDetail detail;
+    EXPECT_EQ(proxy.BatchInsert(TABLE_NAME, batch, uploadInfo, retryCount, detail), E_OK);
     /**
      * @tc.steps: step3. update data to cloud db
      * @tc.expected: step3. E_OK
      */
     ModifyRecords(expectRecords);
-    std::vector<VBucket> update = expectRecords;
-    EXPECT_EQ(proxy.BatchUpdate(TABLE_NAME, update, expectExtends, uploadInfo, retryCount), E_OK);
+    batch.record = expectRecords;
+    EXPECT_EQ(proxy.BatchUpdate(TABLE_NAME, batch, uploadInfo, retryCount, detail), E_OK);
     /**
      * @tc.steps: step3. proxy close cloud db
      * @tc.expected: step3. E_OK
@@ -272,7 +278,7 @@ HWTEST_F(DistributedDBCloudDBProxyTest, CloudDBProxyTest003, TestSize.Level0)
     VBucket extend;
     extend[CloudDbConstant::CURSOR_FIELD] = std::string("");
     std::vector<VBucket> actualRecords;
-    EXPECT_EQ(proxy.Query(TABLE_NAME, extend, actualRecords), -E_QUERY_END);
+    EXPECT_EQ(proxy.Query(TABLE_NAME, extend, actualRecords, detail), -E_QUERY_END);
     ASSERT_EQ(actualRecords.size(), expectRecords.size());
     for (size_t i = 0; i < actualRecords.size(); ++i) {
         for (const auto &field: schema.fields) {
@@ -391,27 +397,28 @@ HWTEST_F(DistributedDBCloudDBProxyTest, CloudDBProxyTest008, TestSize.Level0)
      * @tc.steps: step2. proxy heartbeat with diff status
      */
     virtualCloudDb_->SetActionStatus(CLOUD_NETWORK_ERROR);
-    int errCode = proxy.HeartBeat();
+    ErrorDetail detail;
+    int errCode = proxy.HeartBeat(detail);
     EXPECT_EQ(errCode, -E_CLOUD_NETWORK_ERROR);
     EXPECT_EQ(TransferDBErrno(errCode), CLOUD_NETWORK_ERROR);
 
     virtualCloudDb_->SetActionStatus(CLOUD_SYNC_UNSET);
-    errCode = proxy.HeartBeat();
+    errCode = proxy.HeartBeat(detail);
     EXPECT_EQ(errCode, -E_CLOUD_SYNC_UNSET);
     EXPECT_EQ(TransferDBErrno(errCode), CLOUD_SYNC_UNSET);
 
     virtualCloudDb_->SetActionStatus(CLOUD_FULL_RECORDS);
-    errCode = proxy.HeartBeat();
+    errCode = proxy.HeartBeat(detail);
     EXPECT_EQ(errCode, -E_CLOUD_FULL_RECORDS);
     EXPECT_EQ(TransferDBErrno(errCode), CLOUD_FULL_RECORDS);
 
     virtualCloudDb_->SetActionStatus(CLOUD_LOCK_ERROR);
-    errCode = proxy.HeartBeat();
+    errCode = proxy.HeartBeat(detail);
     EXPECT_EQ(errCode, -E_CLOUD_LOCK_ERROR);
     EXPECT_EQ(TransferDBErrno(errCode), CLOUD_LOCK_ERROR);
 
     virtualCloudDb_->SetActionStatus(DB_ERROR);
-    errCode = proxy.HeartBeat();
+    errCode = proxy.HeartBeat(detail);
     EXPECT_EQ(errCode, -E_CLOUD_ERROR);
     EXPECT_EQ(TransferDBErrno(errCode), CLOUD_ERROR);
 
@@ -501,12 +508,13 @@ HWTEST_F(DistributedDBCloudDBProxyTest, CloudDBProxyTest010, TestSize.Level0)
      * @tc.steps: step2. proxy lock with diff status
      */
     virtualCloudDb_->SetActionStatus(CLOUD_NETWORK_ERROR);
-    auto ret = proxy.Lock();
+    ErrorDetail detail;
+    auto ret = proxy.Lock(detail);
     EXPECT_EQ(ret.first, -E_CLOUD_NETWORK_ERROR);
     EXPECT_EQ(TransferDBErrno(ret.first), CLOUD_NETWORK_ERROR);
 
     virtualCloudDb_->SetActionStatus(CLOUD_LOCK_ERROR);
-    ret = proxy.Lock();
+    ret = proxy.Lock(detail);
     EXPECT_EQ(ret.first, -E_CLOUD_LOCK_ERROR);
     EXPECT_EQ(TransferDBErrno(ret.first), CLOUD_LOCK_ERROR);
     /**
@@ -538,7 +546,8 @@ HWTEST_F(DistributedDBCloudDBProxyTest, CloudDBProxyTest011, TestSize.Level2)
     int currentCount = 0;
     for (int i = 0; i < scheduleCount; ++i) {
         RuntimeContext::GetInstance()->ScheduleTask([&proxy, &waitMutex, &waitCv, &currentCount]() {
-            proxy.HeartBeat();
+            ErrorDetail detail;
+            proxy.HeartBeat(detail);
             {
                 std::lock_guard<std::mutex> autoLock(waitMutex);
                 currentCount++;
@@ -867,28 +876,32 @@ HWTEST_F(DistributedDBCloudDBProxyTest, CloudDBProxyTest013, TestSize.Level0)
      * @tc.expected: step1. return -E_CLOUD_ERROR.
      */
     CloudDBProxy proxy;
-    int ret = proxy.UnLock();
+    ErrorDetail detail;
+    int ret = proxy.UnLock(detail);
     EXPECT_EQ(ret, -E_CLOUD_ERROR);
-    ret = proxy.HeartBeat();
+    ret = proxy.HeartBeat(detail);
     EXPECT_EQ(ret, -E_CLOUD_ERROR);
     VBucket extend;
     const std::string tableName = "test";
     std::vector<VBucket> record;
-    ret = proxy.Query(tableName, extend, record);
+    ret = proxy.Query(tableName, extend, record, detail);
     EXPECT_EQ(ret, -E_CLOUD_ERROR);
     Info info;
     uint32_t retryCount = 0;
-    ret = proxy.BatchInsert(tableName, record, record, info, retryCount);
+    CloudSyncBatch batch;
+    batch.record = record;
+    batch.extend = record;
+    ret = proxy.BatchInsert(tableName, batch, info, retryCount, detail);
     EXPECT_EQ(ret, -E_CLOUD_ERROR);
-    ret = proxy.BatchUpdate(tableName, record, record, info, retryCount);
+    ret = proxy.BatchUpdate(tableName, batch, info, retryCount, detail);
     EXPECT_EQ(ret, -E_CLOUD_ERROR);
-    ret = proxy.BatchDelete(tableName, record, record, info, retryCount);
+    ret = proxy.BatchDelete(tableName, batch, info, retryCount, detail);
     EXPECT_EQ(ret, -E_CLOUD_ERROR);
-    std::pair<int, uint64_t> res = proxy.Lock();
+    std::pair<int, uint64_t> res = proxy.Lock(detail);
     EXPECT_EQ(res.first, -E_CLOUD_ERROR);
-    std::pair<int, std::string> cursor = proxy.GetEmptyCursor(tableName);
+    std::pair<int, std::string> cursor = proxy.GetEmptyCursor(tableName, detail);
     EXPECT_EQ(cursor.first, -E_CLOUD_ERROR);
-    ret = proxy.StopCloudSync();
+    ret = proxy.StopCloudSync(detail);
     EXPECT_EQ(ret, -E_CLOUD_ERROR);
     bool hasCloudUpdate = false;
     ret = proxy.HasCloudUpdate("", "", hasCloudUpdate);
@@ -901,10 +914,10 @@ HWTEST_F(DistributedDBCloudDBProxyTest, CloudDBProxyTest013, TestSize.Level0)
     std::pair<int, std::string> ver = proxy.GetCloudVersion("test");
     EXPECT_EQ(ver.first, -E_NOT_SUPPORT);
     std::vector<Asset> assets;
-    ret = proxy.RemoveLocalAssets(assets);
+    ret = proxy.RemoveLocalAssets(assets, detail);
     EXPECT_EQ(ret, -E_OK);
     assets = {{}};
-    ret = proxy.RemoveLocalAssets(assets);
+    ret = proxy.RemoveLocalAssets(assets, detail);
     EXPECT_EQ(ret, -E_OK);
 }
 
@@ -942,12 +955,13 @@ HWTEST_F(DistributedDBCloudDBProxyTest, CloudDBProxyTest015, TestSize.Level0)
      * @tc.expected: step1. return E_OK.
      */
     std::vector<IAssetLoader::AssetRecord> downloadAssets;
-    int ret = proxy.BatchDownload(TABLE_NAME, downloadAssets);
+    ErrorDetail detail;
+    int ret = proxy.BatchDownload(TABLE_NAME, downloadAssets, detail);
     EXPECT_EQ(downloadAssets.size(), uintExpected);
     EXPECT_EQ(ret, E_OK);
     
     downloadAssets.push_back(emptyR1);
-    ret = proxy.BatchDownload(TABLE_NAME, downloadAssets);
+    ret = proxy.BatchDownload(TABLE_NAME, downloadAssets, detail);
     uintExpected = 1;
     EXPECT_EQ(downloadAssets.size(), uintExpected);
     EXPECT_EQ(ret, E_OK);
@@ -957,7 +971,7 @@ HWTEST_F(DistributedDBCloudDBProxyTest, CloudDBProxyTest015, TestSize.Level0)
      * @tc.expected: step2. return -E_NOT_SET.
      */
     downloadAssets.push_back(nonEmptyR2);
-    ret = proxy.BatchDownload(TABLE_NAME, downloadAssets);
+    ret = proxy.BatchDownload(TABLE_NAME, downloadAssets, detail);
     uintExpected = 2;
     EXPECT_EQ(downloadAssets.size(), uintExpected);
     EXPECT_EQ(ret, -E_NOT_SET);
@@ -987,7 +1001,7 @@ HWTEST_F(DistributedDBCloudDBProxyTest, CloudDBProxyTest015, TestSize.Level0)
     uintExpected = 4;
     EXPECT_EQ(downloadAssets.size(), uintExpected);
 
-    ret = proxy.BatchDownload(TABLE_NAME, downloadAssets);
+    ret = proxy.BatchDownload(TABLE_NAME, downloadAssets, detail);
     EXPECT_EQ(ret, E_OK);
     EXPECT_EQ(virtialAssetLoader->GetBatchDownloadCount(), 1u);
     EXPECT_EQ(totalRecordsUsed, 2);
@@ -1011,7 +1025,8 @@ HWTEST_F(DistributedDBCloudDBProxyTest, CloudDBProxyTest016, TestSize.Level0)
     auto proxy = std::make_shared<CloudDBProxy>();
     auto loader = make_shared<VirtualAssetLoader>();
     proxy->SetIAssetLoader(loader);
-    proxy->CancelDownload();
+    ErrorDetail detail;
+    proxy->CancelDownload(detail);
     EXPECT_EQ(loader->GetCancelCount(), 0u);
 }
 
@@ -1120,12 +1135,13 @@ HWTEST_F(DistributedDBCloudDBProxyTest, CloudDBProxyTest018, TestSize.Level0)
     CloudDBProxy proxy;
     VBucket extend;
     std::vector<VBucket> data;
-    EXPECT_EQ(proxy.QueryAllGid("", extend, data), -E_CLOUD_ERROR);
+    ErrorDetail detail;
+    EXPECT_EQ(proxy.QueryAllGid("", extend, data, detail), -E_CLOUD_ERROR);
     proxy.SetCloudDB(virtualCloudDb_);
     virtualCloudDb_->ForkQueryAllGid([](const std::string &, VBucket &, std::vector<VBucket> &) {
         return DB_ERROR;
     });
-    EXPECT_EQ(proxy.QueryAllGid("", extend, data), -E_CLOUD_ERROR);
+    EXPECT_EQ(proxy.QueryAllGid("", extend, data, detail), -E_CLOUD_ERROR);
     virtualCloudDb_->ForkQueryAllGid(nullptr);
 }
 

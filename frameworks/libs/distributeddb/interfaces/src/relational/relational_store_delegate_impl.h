@@ -84,6 +84,8 @@ public:
 
     DBStatus SetCloudConflictHandler(const std::shared_ptr<ICloudConflictHandler> &handler) override;
 
+    DBStatus RegisterAssetDownloadFailCallback(const AssetDownloadFailCallback &callback) override;
+
     std::pair<DBStatus, int32_t> GetDownloadingAssetsCount() override;
 
     DBStatus StopTask([[gnu::unused]] TaskType type) override;

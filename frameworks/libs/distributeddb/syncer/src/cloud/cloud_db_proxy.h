@@ -40,36 +40,37 @@ public:
 
     void SetIAssetLoader(const std::shared_ptr<IAssetLoader> &loader);
 
-    int BatchInsert(const std::string &tableName, std::vector<VBucket> &record,
-        std::vector<VBucket> &extend, Info &uploadInfo, uint32_t &retryCount);
+    int BatchInsert(const std::string &tableName, CloudSyncBatch &batch, Info &uploadInfo,
+        uint32_t &retryCount, ErrorDetail &errorDetail);
 
-    int BatchUpdate(const std::string &tableName, std::vector<VBucket> &record, std::vector<VBucket> &extend,
-        Info &uploadInfo, uint32_t &retryCount);
+    int BatchUpdate(const std::string &tableName, CloudSyncBatch &batch, Info &uploadInfo,
+        uint32_t &retryCount, ErrorDetail &errorDetail);
 
-    int BatchDelete(const std::string &tableName, std::vector<VBucket> &record, std::vector<VBucket> &extend,
-        Info &uploadInfo, uint32_t &retryCount);
+    int BatchDelete(const std::string &tableName, CloudSyncBatch &batch, Info &uploadInfo,
+        uint32_t &retryCount, ErrorDetail &errorDetail);
 
-    int Query(const std::string &tableName, VBucket &extend, std::vector<VBucket> &data);
+    int Query(const std::string &tableName, VBucket &extend, std::vector<VBucket> &data,
+        ErrorDetail &errorDetail);
 
-    std::pair<int, std::string> GetEmptyCursor(const std::string &tableName);
+    std::pair<int, std::string> GetEmptyCursor(const std::string &tableName, ErrorDetail &errorDetail);
 
-    std::pair<int, uint64_t> Lock();
+    std::pair<int, uint64_t> Lock(ErrorDetail &errorDetail);
 
-    int UnLock();
+    int UnLock(ErrorDetail &errorDetail);
 
     int Close();
 
-    int HeartBeat();
+    int HeartBeat(ErrorDetail &errorDetail);
 
     bool IsNotExistCloudDB() const;
 
     int Download(const std::string &tableName, const std::string &gid, const Type &prefix,
-        std::map<std::string, Assets> &assets);
+        std::map<std::string, Assets> &assets, ErrorDetail &errorDetail);
 
-    int RemoveLocalAssets(const std::vector<Asset> &assets);
+    int RemoveLocalAssets(const std::vector<Asset> &assets, ErrorDetail &errorDetail);
 
     int RemoveLocalAssets(const std::string &tableName, const std::string &gid, const Type &prefix,
-        std::map<std::string, Assets> &assets);
+        std::map<std::string, Assets> &assets, ErrorDetail &errorDetail);
 
     void SetGenCloudVersionCallback(const GenerateCloudVersionCallback &callback);
 
@@ -79,21 +80,24 @@ public:
 
     void SetPrepareTraceId(const std::string &traceId) const;
 
-    int BatchDownload(const std::string &tableName, std::vector<IAssetLoader::AssetRecord> &downloadAssets);
+    int BatchDownload(const std::string &tableName, std::vector<IAssetLoader::AssetRecord> &downloadAssets,
+        ErrorDetail &errorDetail);
 
-    int BatchRemoveLocalAssets(const std::string &tableName, std::vector<IAssetLoader::AssetRecord> &removeAssets);
+    int BatchRemoveLocalAssets(const std::string &tableName, std::vector<IAssetLoader::AssetRecord> &removeAssets,
+        ErrorDetail &errorDetail);
 
-    void CancelDownload();
+    int CancelDownload(ErrorDetail &errorDetail);
 
     void SetCloudConflictHandler(const std::shared_ptr<ICloudConflictHandler> &handler);
 
     std::weak_ptr<ICloudConflictHandler> GetCloudConflictHandler();
 
-    int QueryAllGid(const std::string &tableName, VBucket &extend, std::vector<VBucket> &data);
+    int QueryAllGid(const std::string &tableName, VBucket &extend, std::vector<VBucket> &data,
+        ErrorDetail &errorDetail);
 
     static int GetInnerErrorCode(DBStatus status);
 
-    int StopCloudSync();
+    int StopCloudSync(ErrorDetail &errorDetail);
 
     int HasCloudUpdate(const std::string &tableName, const std::string &previousCloudWaterMark, bool &hasCloudUpdate);
 protected:
@@ -135,6 +139,10 @@ protected:
         std::string GetTableName();
 
         uint32_t GetRetryCount();
+
+        void SetErrorDetail(const ErrorDetail &errorDetail);
+
+        void MoveOutErrorDetail(ErrorDetail &errorDetail);
     private:
         static bool IsEmptyAssetId(const Assets &assets);
 
@@ -156,6 +164,7 @@ protected:
         std::vector<VBucket> data_;
         std::pair<int, uint64_t> lockStatus_;
         std::pair<int, std::string> cursorStatus_;
+        ErrorDetail errorDetail_;
     };
     enum class InnerActionCode : uint8_t {
         INSERT = 0,
@@ -194,10 +203,12 @@ protected:
         const std::shared_ptr<ICloudDb> &cloudDb);
 
     int BatchOperateAssetsWithAllRecords(const std::string &tableName,
-        std::vector<IAssetLoader::AssetRecord> &allRecords, const InnerBatchOpType operationType);
+        std::vector<IAssetLoader::AssetRecord> &allRecords, const InnerBatchOpType operationType,
+        ErrorDetail &errorDetail);
 
     int BatchOperateAssetsInner(const std::string &tableName,
-        std::vector<IAssetLoader::AssetRecord> &necessaryRecords, const InnerBatchOpType operationType);
+        std::vector<IAssetLoader::AssetRecord> &necessaryRecords, const InnerBatchOpType operationType,
+        ErrorDetail &errorDetail);
 
     // save record with assets in nonEmptyRecords, return the indexes of these records in the original vector
     static std::vector<int> GetNotEmptyAssetRecords(std::vector<IAssetLoader::AssetRecord> &originalRecords,
@@ -210,6 +221,16 @@ protected:
     static void RecordSyncDataTimeStampLog(std::vector<VBucket> &data, InnerActionCode action);
 
     void FillErrorToExtend(int error, std::vector<VBucket> &extend);
+
+    // fetch external error detail for any status except OK/QUERY_END
+    static void FetchErrorDetailFromCloudDb(const std::shared_ptr<ICloudDb> &cloudDb, DBStatus status,
+        ErrorDetail &errorDetail);
+
+    static void FetchErrorDetailFromAssetLoader(const std::shared_ptr<IAssetLoader> &loader, DBStatus status,
+        ErrorDetail &errorDetail);
+
+    static void FetchErrorDetailFromAssetRecords(const std::shared_ptr<IAssetLoader> &loader,
+        const std::vector<IAssetLoader::AssetRecord> &records, ErrorDetail &errorDetail);
 
     mutable std::shared_mutex cloudMutex_;
     mutable std::shared_mutex assetLoaderMutex_;

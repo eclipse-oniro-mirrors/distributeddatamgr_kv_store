@@ -80,6 +80,8 @@ public:
     SyncProcess GetCloudTaskStatus(uint64_t taskId) override;
 
     int SetCloudConflictHandler(const std::shared_ptr<ICloudConflictHandler> &handler) override;
+
+    int RegisterAssetDownloadFailCallback(const AssetDownloadFailCallback &callback) override;
 #endif
 
 #ifdef USE_DISTRIBUTEDDB_DEVICE

@@ -96,6 +96,8 @@ public:
     virtual SyncProcess GetCloudTaskStatus(uint64_t taskId) = 0;
 
     virtual int SetCloudConflictHandler(const std::shared_ptr<ICloudConflictHandler> &handler) = 0;
+
+    virtual int RegisterAssetDownloadFailCallback(const AssetDownloadFailCallback &callback) = 0;
 #endif
 
 #ifdef USE_DISTRIBUTEDDB_DEVICE

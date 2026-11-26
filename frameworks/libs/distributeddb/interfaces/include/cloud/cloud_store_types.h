@@ -66,6 +66,7 @@ struct ClearDeviceDataOption {
 
 using VBucket = std::map<std::string, Type>;
 using GenerateCloudVersionCallback = std::function<std::string(const std::string &originVersion)>;
+using AssetDownloadFailCallback = std::function<void(const std::string &tableName, const ErrorDetail &errorDetail)>;
 
 struct Field {
     std::string colName;

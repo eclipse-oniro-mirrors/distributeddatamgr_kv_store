@@ -103,74 +103,105 @@ void CloudDBProxy::FillErrorToExtend(int error, std::vector<VBucket> &extend)
     }
 }
 
-int CloudDBProxy::BatchInsert(const std::string &tableName, std::vector<VBucket> &record,
-    std::vector<VBucket> &extend, Info &uploadInfo, uint32_t &retryCount)
+void CloudDBProxy::FetchErrorDetailFromCloudDb(const std::shared_ptr<ICloudDb> &cloudDb, DBStatus status,
+    ErrorDetail &errorDetail)
 {
-    std::shared_lock<std::shared_mutex> readLock(cloudMutex_);
-    if (iCloudDb_ == nullptr) {
-        FillErrorToExtend(static_cast<int>(-E_CLOUD_ERROR), extend);
-        return -E_CLOUD_ERROR;
+    if (status != DBStatus::OK && status != DBStatus::QUERY_END && cloudDb != nullptr) {
+        errorDetail = cloudDb->GetErrorDetail();
     }
-    std::shared_ptr<ICloudDb> cloudDb = iCloudDb_;
-    std::shared_ptr<CloudActionContext> context = std::make_shared<CloudActionContext>();
-    context->MoveInRecordAndExtend(record, extend);
-    context->SetTableName(tableName);
-    int errCode = InnerAction(context, cloudDb, InnerActionCode::INSERT);
-    uploadInfo = context->GetInfo();
-    retryCount = context->GetRetryCount();
-    context->MoveOutRecordAndExtend(record, extend);
-    return errCode;
 }
 
-int CloudDBProxy::BatchUpdate(const std::string &tableName, std::vector<VBucket> &record,
-    std::vector<VBucket> &extend, Info &uploadInfo, uint32_t &retryCount)
+void CloudDBProxy::FetchErrorDetailFromAssetLoader(const std::shared_ptr<IAssetLoader> &loader, DBStatus status,
+    ErrorDetail &errorDetail)
 {
-    std::shared_lock<std::shared_mutex> readLock(cloudMutex_);
-    if (iCloudDb_ == nullptr) {
-        FillErrorToExtend(static_cast<int>(-E_CLOUD_ERROR), extend);
-        return -E_CLOUD_ERROR;
+    if (status != DBStatus::OK && status != DBStatus::QUERY_END && loader != nullptr) {
+        errorDetail = loader->GetErrorDetail();
     }
-    std::shared_ptr<ICloudDb> cloudDb = iCloudDb_;
-    std::shared_ptr<CloudActionContext> context = std::make_shared<CloudActionContext>();
-    context->SetTableName(tableName);
-    context->MoveInRecordAndExtend(record, extend);
-    int errCode = InnerAction(context, cloudDb, InnerActionCode::UPDATE);
-    uploadInfo = context->GetInfo();
-    retryCount = context->GetRetryCount();
-    context->MoveOutRecordAndExtend(record, extend);
-    return errCode;
 }
 
-int CloudDBProxy::BatchDelete(const std::string &tableName, std::vector<VBucket> &record, std::vector<VBucket> &extend,
-    Info &uploadInfo, uint32_t &retryCount)
+void CloudDBProxy::FetchErrorDetailFromAssetRecords(const std::shared_ptr<IAssetLoader> &loader,
+    const std::vector<IAssetLoader::AssetRecord> &records, ErrorDetail &errorDetail)
+{
+    bool isRecordNeedDetail = false;
+    for (const auto &record : records) {
+        if (record.status != DBStatus::OK && record.status != DBStatus::QUERY_END) {
+            isRecordNeedDetail = true;
+            break;
+        }
+    }
+    if (isRecordNeedDetail && loader != nullptr) {
+        errorDetail = loader->GetErrorDetail();
+    }
+}
+
+int CloudDBProxy::BatchInsert(const std::string &tableName, CloudSyncBatch &batch, Info &uploadInfo,
+    uint32_t &retryCount, ErrorDetail &errorDetail)
 {
     std::shared_lock<std::shared_mutex> readLock(cloudMutex_);
     if (iCloudDb_ == nullptr) {
-        FillErrorToExtend(static_cast<int>(-E_CLOUD_ERROR), extend);
+        FillErrorToExtend(static_cast<int>(-E_CLOUD_ERROR), batch.extend);
         return -E_CLOUD_ERROR;
     }
     std::shared_ptr<CloudActionContext> context = std::make_shared<CloudActionContext>();
-    std::shared_ptr<ICloudDb> cloudDb = iCloudDb_;
-    context->MoveInRecordAndExtend(record, extend);
+    context->MoveInRecordAndExtend(batch.record, batch.extend);
     context->SetTableName(tableName);
-    int errCode = InnerAction(context, cloudDb, InnerActionCode::DELETE);
+    int errCode = InnerAction(context, iCloudDb_, InnerActionCode::INSERT);
     uploadInfo = context->GetInfo();
     retryCount = context->GetRetryCount();
-    context->MoveOutRecordAndExtend(record, extend);
+    context->MoveOutRecordAndExtend(batch.record, batch.extend);
+    context->MoveOutErrorDetail(errorDetail);
     return errCode;
 }
 
-int CloudDBProxy::Query(const std::string &tableName, VBucket &extend, std::vector<VBucket> &data)
+int CloudDBProxy::BatchUpdate(const std::string &tableName, CloudSyncBatch &batch, Info &uploadInfo,
+    uint32_t &retryCount, ErrorDetail &errorDetail)
+{
+    std::shared_lock<std::shared_mutex> readLock(cloudMutex_);
+    if (iCloudDb_ == nullptr) {
+        FillErrorToExtend(static_cast<int>(-E_CLOUD_ERROR), batch.extend);
+        return -E_CLOUD_ERROR;
+    }
+    std::shared_ptr<CloudActionContext> context = std::make_shared<CloudActionContext>();
+    context->SetTableName(tableName);
+    context->MoveInRecordAndExtend(batch.record, batch.extend);
+    int errCode = InnerAction(context, iCloudDb_, InnerActionCode::UPDATE);
+    uploadInfo = context->GetInfo();
+    retryCount = context->GetRetryCount();
+    context->MoveOutRecordAndExtend(batch.record, batch.extend);
+    context->MoveOutErrorDetail(errorDetail);
+    return errCode;
+}
+
+int CloudDBProxy::BatchDelete(const std::string &tableName, CloudSyncBatch &batch, Info &uploadInfo,
+    uint32_t &retryCount, ErrorDetail &errorDetail)
+{
+    std::shared_lock<std::shared_mutex> readLock(cloudMutex_);
+    if (iCloudDb_ == nullptr) {
+        FillErrorToExtend(static_cast<int>(-E_CLOUD_ERROR), batch.extend);
+        return -E_CLOUD_ERROR;
+    }
+    std::shared_ptr<CloudActionContext> context = std::make_shared<CloudActionContext>();
+    context->MoveInRecordAndExtend(batch.record, batch.extend);
+    context->SetTableName(tableName);
+    int errCode = InnerAction(context, iCloudDb_, InnerActionCode::DELETE);
+    uploadInfo = context->GetInfo();
+    retryCount = context->GetRetryCount();
+    context->MoveOutRecordAndExtend(batch.record, batch.extend);
+    context->MoveOutErrorDetail(errorDetail);
+    return errCode;
+}
+
+int CloudDBProxy::Query(const std::string &tableName, VBucket &extend, std::vector<VBucket> &data,
+    ErrorDetail &errorDetail)
 {
     std::shared_lock<std::shared_mutex> readLock(cloudMutex_);
     if (iCloudDb_ == nullptr) {
         return -E_CLOUD_ERROR;
     }
-    std::shared_ptr<ICloudDb> cloudDb = iCloudDb_;
     std::shared_ptr<CloudActionContext> context = std::make_shared<CloudActionContext>();
     context->MoveInQueryExtendAndData(extend, data);
     context->SetTableName(tableName);
-    int errCode = InnerAction(context, cloudDb, InnerActionCode::QUERY);
+    int errCode = InnerAction(context, iCloudDb_, InnerActionCode::QUERY);
     context->MoveOutQueryExtendAndData(extend, data);
     for (auto &item : data) {
         for (auto &row : item) {
@@ -182,33 +213,35 @@ int CloudDBProxy::Query(const std::string &tableName, VBucket &extend, std::vect
         }
     }
     RecordSyncDataTimeStampLog(data, InnerActionCode::QUERY);
+    context->MoveOutErrorDetail(errorDetail);
     return errCode;
 }
 
-std::pair<int, uint64_t> CloudDBProxy::Lock()
+std::pair<int, uint64_t> CloudDBProxy::Lock(ErrorDetail &errorDetail)
 {
     std::shared_lock<std::shared_mutex> readLock(cloudMutex_);
     if (iCloudDb_ == nullptr) {
         return { -E_CLOUD_ERROR, 0u };
     }
-    std::shared_ptr<ICloudDb> cloudDb = iCloudDb_;
     std::shared_ptr<CloudActionContext> context = std::make_shared<CloudActionContext>();
     std::pair<int, uint64_t> lockStatus;
-    int errCode = InnerAction(context, cloudDb, InnerActionCode::LOCK);
+    int errCode = InnerAction(context, iCloudDb_, InnerActionCode::LOCK);
     context->MoveOutLockStatus(lockStatus);
     lockStatus.first = errCode;
+    context->MoveOutErrorDetail(errorDetail);
     return lockStatus;
 }
 
-int CloudDBProxy::UnLock()
+int CloudDBProxy::UnLock(ErrorDetail &errorDetail)
 {
     std::shared_lock<std::shared_mutex> readLock(cloudMutex_);
     if (iCloudDb_ == nullptr) {
         return -E_CLOUD_ERROR;
     }
-    std::shared_ptr<ICloudDb> cloudDb = iCloudDb_;
     std::shared_ptr<CloudActionContext> context = std::make_shared<CloudActionContext>();
-    return InnerAction(context, cloudDb, InnerActionCode::UNLOCK);
+    int errCode = InnerAction(context, iCloudDb_, InnerActionCode::UNLOCK);
+    context->MoveOutErrorDetail(errorDetail);
+    return errCode;
 }
 
 int CloudDBProxy::Close()
@@ -246,16 +279,17 @@ int CloudDBProxy::Close()
     return status == OK ? E_OK : -E_CLOUD_ERROR;
 }
 
-int CloudDBProxy::HeartBeat()
+int CloudDBProxy::HeartBeat(ErrorDetail &errorDetail)
 {
     std::shared_lock<std::shared_mutex> readLock(cloudMutex_);
     if (iCloudDb_ == nullptr) {
         return -E_CLOUD_ERROR;
     }
 
-    std::shared_ptr<ICloudDb> cloudDb = iCloudDb_;
     std::shared_ptr<CloudActionContext> context = std::make_shared<CloudActionContext>();
-    return InnerAction(context, cloudDb, InnerActionCode::HEARTBEAT);
+    int errCode = InnerAction(context, iCloudDb_, InnerActionCode::HEARTBEAT);
+    context->MoveOutErrorDetail(errorDetail);
+    return errCode;
 }
 
 bool CloudDBProxy::IsNotExistCloudDB() const
@@ -265,7 +299,7 @@ bool CloudDBProxy::IsNotExistCloudDB() const
 }
 
 int CloudDBProxy::Download(const std::string &tableName, const std::string &gid, const Type &prefix,
-    std::map<std::string, Assets> &assets)
+    std::map<std::string, Assets> &assets, ErrorDetail &errorDetail)
 {
     if (assets.empty()) {
         return E_OK;
@@ -278,16 +312,19 @@ int CloudDBProxy::Download(const std::string &tableName, const std::string &gid,
     isDownloading_ = true;
     DBStatus status = iAssetLoader_->Download(tableName, gid, prefix, assets);
     isDownloading_ = false;
+    if (status == SKIP_ASSET) {
+        // SKIP_ASSET is non-interrupting, keep fetching detail for the final result
+        FetchErrorDetailFromAssetLoader(iAssetLoader_, status, errorDetail);
+        return status;
+    }
     if (status != OK) {
         LOGW("[CloudDBProxy] download asset failed %d", static_cast<int>(status));
-        if (status == SKIP_ASSET) {
-            return status;
-        }
     }
+    FetchErrorDetailFromAssetLoader(iAssetLoader_, status, errorDetail);
     return GetInnerErrorCode(status);
 }
 
-int CloudDBProxy::RemoveLocalAssets(const std::vector<Asset> &assets)
+int CloudDBProxy::RemoveLocalAssets(const std::vector<Asset> &assets, ErrorDetail &errorDetail)
 {
     if (assets.empty()) {
         return E_OK;
@@ -300,13 +337,14 @@ int CloudDBProxy::RemoveLocalAssets(const std::vector<Asset> &assets)
     DBStatus status = iAssetLoader_->RemoveLocalAssets(assets);
     if (status != OK) {
         LOGE("[CloudDBProxy] remove local asset failed %d", static_cast<int>(status));
+        FetchErrorDetailFromAssetLoader(iAssetLoader_, status, errorDetail);
         return -E_REMOVE_ASSETS_FAILED;
     }
     return E_OK;
 }
 
 int CloudDBProxy::RemoveLocalAssets(const std::string &tableName, const std::string &gid, const Type &prefix,
-    std::map<std::string, Assets> &assets)
+    std::map<std::string, Assets> &assets, ErrorDetail &errorDetail)
 {
     if (assets.empty()) {
         return E_OK;
@@ -319,24 +357,25 @@ int CloudDBProxy::RemoveLocalAssets(const std::string &tableName, const std::str
     DBStatus status = iAssetLoader_->RemoveLocalAssets(tableName, gid, prefix, assets);
     if (status != OK) {
         LOGE("[CloudDBProxy] remove local asset failed %d", static_cast<int>(status));
+        FetchErrorDetailFromAssetLoader(iAssetLoader_, status, errorDetail);
         return -E_REMOVE_ASSETS_FAILED;
     }
     return E_OK;
 }
 
-std::pair<int, std::string> CloudDBProxy::GetEmptyCursor(const std::string &tableName)
+std::pair<int, std::string> CloudDBProxy::GetEmptyCursor(const std::string &tableName, ErrorDetail &errorDetail)
 {
     std::shared_lock<std::shared_mutex> readLock(cloudMutex_);
     if (iCloudDb_ == nullptr) {
         return { -E_CLOUD_ERROR, "" };
     }
-    std::shared_ptr<ICloudDb> cloudDb = iCloudDb_;
     std::shared_ptr<CloudActionContext> context = std::make_shared<CloudActionContext>();
     context->SetTableName(tableName);
-    int errCode = InnerAction(context, cloudDb, InnerActionCode::GET_EMPTY_CURSOR);
+    int errCode = InnerAction(context, iCloudDb_, InnerActionCode::GET_EMPTY_CURSOR);
     std::pair<int, std::string> cursorStatus;
     context->MoveOutCursorStatus(cursorStatus);
     cursorStatus.first = errCode;
+    context->MoveOutErrorDetail(errorDetail);
     return cursorStatus;
 }
 
@@ -436,6 +475,10 @@ void CloudDBProxy::InnerActionTask(const std::shared_ptr<CloudActionContext> &co
 
     if (!setResAlready) {
         context->SetActionRes(GetInnerErrorCode(status));
+    }
+
+    if (status != DBStatus::OK && status != DBStatus::QUERY_END) {
+        context->SetErrorDetail(cloudDb->GetErrorDetail());
     }
 
     context->FinishAndNotify();
@@ -696,6 +739,19 @@ uint32_t CloudDBProxy::CloudActionContext::GetRetryCount()
     return retryCount_;
 }
 
+void CloudDBProxy::CloudActionContext::SetErrorDetail(const ErrorDetail &errorDetail)
+{
+    std::lock_guard<std::mutex> autoLock(actionMutex_);
+    errorDetail_ = errorDetail;
+}
+
+void CloudDBProxy::CloudActionContext::MoveOutErrorDetail(ErrorDetail &errorDetail)
+{
+    std::lock_guard<std::mutex> autoLock(actionMutex_);
+    errorDetail = std::move(errorDetail_);
+    errorDetail_ = {};
+}
+
 void CloudDBProxy::SetGenCloudVersionCallback(const GenerateCloudVersionCallback &callback)
 {
     std::lock_guard<std::mutex> autoLock(genVersionMutex_);
@@ -735,19 +791,21 @@ void CloudDBProxy::SetPrepareTraceId(const std::string &traceId) const
     }
 }
 
-int CloudDBProxy::BatchDownload(const std::string &tableName, std::vector<IAssetLoader::AssetRecord> &downloadAssets)
+int CloudDBProxy::BatchDownload(const std::string &tableName, std::vector<IAssetLoader::AssetRecord> &downloadAssets,
+    ErrorDetail &errorDetail)
 {
-    return BatchOperateAssetsWithAllRecords(tableName, downloadAssets, CloudDBProxy::BATCH_DOWNLOAD);
+    return BatchOperateAssetsWithAllRecords(tableName, downloadAssets, CloudDBProxy::BATCH_DOWNLOAD, errorDetail);
 }
 
 int CloudDBProxy::BatchRemoveLocalAssets(const std::string &tableName,
-    std::vector<IAssetLoader::AssetRecord> &removeAssets)
+    std::vector<IAssetLoader::AssetRecord> &removeAssets, ErrorDetail &errorDetail)
 {
-    return BatchOperateAssetsWithAllRecords(tableName, removeAssets, CloudDBProxy::BATCH_REMOVE_LOCAL);
+    return BatchOperateAssetsWithAllRecords(tableName, removeAssets, CloudDBProxy::BATCH_REMOVE_LOCAL, errorDetail);
 }
 
 int CloudDBProxy::BatchOperateAssetsWithAllRecords(const std::string &tableName,
-    std::vector<IAssetLoader::AssetRecord> &allRecords, const InnerBatchOpType operationType)
+    std::vector<IAssetLoader::AssetRecord> &allRecords, const InnerBatchOpType operationType,
+    ErrorDetail &errorDetail)
 {
     std::vector<IAssetLoader::AssetRecord> nonEmptyRecords;
     auto indexes = GetNotEmptyAssetRecords(allRecords, nonEmptyRecords);
@@ -755,14 +813,15 @@ int CloudDBProxy::BatchOperateAssetsWithAllRecords(const std::string &tableName,
         return E_OK;
     }
 
-    int errCode = BatchOperateAssetsInner(tableName, nonEmptyRecords, operationType);
+    int errCode = BatchOperateAssetsInner(tableName, nonEmptyRecords, operationType, errorDetail);
 
     CopyAssetsBack(allRecords, indexes, nonEmptyRecords);
     return errCode;
 }
 
 int CloudDBProxy::BatchOperateAssetsInner(const std::string &tableName,
-    std::vector<IAssetLoader::AssetRecord> &necessaryRecords, const InnerBatchOpType operationType)
+    std::vector<IAssetLoader::AssetRecord> &necessaryRecords, const InnerBatchOpType operationType,
+    ErrorDetail &errorDetail)
 {
     std::shared_lock<std::shared_mutex> readLock(assetLoaderMutex_);
     if (iAssetLoader_ == nullptr) {
@@ -779,6 +838,7 @@ int CloudDBProxy::BatchOperateAssetsInner(const std::string &tableName,
         LOGE("[CloudDBProxy][BatchOperateAssetsInner] Internal error! Operation type is invalid: %d", operationType);
         return -E_NOT_SET;
     }
+    FetchErrorDetailFromAssetRecords(iAssetLoader_, necessaryRecords, errorDetail);
     return E_OK;
 }
 
@@ -824,20 +884,22 @@ void CloudDBProxy::CopyAssetsBack(std::vector<IAssetLoader::AssetRecord> &origin
     }
 }
 
-void CloudDBProxy::CancelDownload()
+int CloudDBProxy::CancelDownload(ErrorDetail &errorDetail)
 {
     std::shared_lock<std::shared_mutex> readLock(assetLoaderMutex_);
     if (!isDownloading_) {
-        return;
+        return E_OK;
     }
     if (iAssetLoader_ == nullptr) {
         LOGE("[CloudDBProxy] Asset loader has not been set %d when cancel", -E_NOT_SET);
-        return;
+        return -E_NOT_SET;
     }
     DBStatus status = iAssetLoader_->CancelDownload();
     if (status != OK) {
         LOGW("[CloudDBProxy] cancel download failed %d", static_cast<int>(status));
     }
+    FetchErrorDetailFromAssetLoader(iAssetLoader_, status, errorDetail);
+    return GetInnerErrorCode(status);
 }
 
 void CloudDBProxy::SetCloudConflictHandler(const std::shared_ptr<ICloudConflictHandler> &handler)
@@ -852,29 +914,32 @@ std::weak_ptr<ICloudConflictHandler> CloudDBProxy::GetCloudConflictHandler()
     return std::weak_ptr<ICloudConflictHandler>(conflictHandler_);
 }
 
-int CloudDBProxy::QueryAllGid(const std::string &tableName, VBucket &extend, std::vector<VBucket> &data)
+int CloudDBProxy::QueryAllGid(const std::string &tableName, VBucket &extend, std::vector<VBucket> &data,
+    ErrorDetail &errorDetail)
 {
     std::shared_lock<std::shared_mutex> readLock(cloudMutex_);
     if (iCloudDb_ == nullptr) {
         return -E_CLOUD_ERROR;
     }
-    auto ret = iCloudDb_->QueryAllGid(tableName, extend, data);
+    DBStatus ret = iCloudDb_->QueryAllGid(tableName, extend, data);
     if (ret != DBStatus::OK && ret != DBStatus::QUERY_END) {
-        LOGE("[CloudDBProxy] QueryAllGid failed[%d]", ret);
+        LOGE("[CloudDBProxy] QueryAllGid failed[%d]", static_cast<int>(ret));
     }
+    FetchErrorDetailFromCloudDb(iCloudDb_, ret, errorDetail);
     return GetInnerErrorCode(ret);
 }
 
-int CloudDBProxy::StopCloudSync()
+int CloudDBProxy::StopCloudSync(ErrorDetail &errorDetail)
 {
     std::shared_lock<std::shared_mutex> readLock(cloudMutex_);
     if (iCloudDb_ == nullptr) {
         return -E_CLOUD_ERROR;
     }
-    auto ret = iCloudDb_->StopCloudSync();
+    DBStatus ret = iCloudDb_->StopCloudSync();
     if (ret != DBStatus::OK) {
-        LOGE("[CloudDBProxy] StopCloudSync failed[%d]", ret);
+        LOGE("[CloudDBProxy] StopCloudSync failed[%d]", static_cast<int>(ret));
     }
+    FetchErrorDetailFromCloudDb(iCloudDb_, ret, errorDetail);
     return GetInnerErrorCode(ret);
 }
 

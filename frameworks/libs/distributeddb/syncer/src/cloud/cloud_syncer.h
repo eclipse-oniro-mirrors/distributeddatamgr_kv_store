@@ -62,7 +62,8 @@ public:
 
     int ClearCloudWatermark(const std::vector<std::string> &tableNameList);
 
-    int StopSyncTask(const std::function<int(void)> &removeFunc, int errCode = -E_CLOUD_ERROR);
+    int StopSyncTask(const std::function<int(void)> &removeFunc, int errCode = -E_CLOUD_ERROR,
+        ProcessNotifier::StopSource source = ProcessNotifier::StopSource::NONE);
 
     int CleanWaterMarkInMemory(const std::set<std::string> &tableNameList);
 
@@ -70,7 +71,8 @@ public:
 
     void Close();
 
-    void StopAllTasks(int errCode = -E_USER_CHANGE);
+    void StopAllTasks(int errCode = -E_USER_CHANGE,
+        ProcessNotifier::StopSource source = ProcessNotifier::StopSource::NONE);
 
     std::string GetIdentify() const override;
 
@@ -97,6 +99,8 @@ public:
     int ClearCloudWatermark(std::function<int(void)> &clearFunc);
 
     void SetCloudConflictHandler(const std::shared_ptr<ICloudConflictHandler> &handler);
+
+    void RegisterAssetDownloadFailCallback(const AssetDownloadFailCallback &callback);
 protected:
     struct TaskContext {
         TaskId currentTaskId = 0u;
@@ -216,8 +220,7 @@ protected:
 
     int PreHandleData(VBucket &datum, const std::vector<std::string> &pkColNames);
 
-    int QueryCloudData(TaskId taskId, const std::string &tableName, std::string &cloudWaterMark,
-        DownloadData &downloadData, bool &needCheckWaterMark);
+    int QueryCloudData(TaskId taskId, SyncParam &param, ErrorDetail &errorDetail);
 
     size_t GetCurrentCommonTaskNum();
 
@@ -227,13 +230,15 @@ protected:
 
     int TryToAddSyncTask(CloudTaskInfo &&taskInfo);
 
+    int TryToAddSyncTaskInner(CloudTaskInfo &taskInfo);
+
     int CheckQueueSizeWithNoLock(bool priorityTask);
 
     int PrepareSync(TaskId taskId);
 
     int LockCloud(TaskId taskId);
 
-    int UnlockCloud();
+    int UnlockCloud(ErrorDetail &errorDetail);
 
     int StartHeartBeatTimer(int period, TaskId taskId);
 
@@ -241,11 +246,10 @@ protected:
 
     void HeartBeat(TimerId timerId, TaskId taskId);
 
-    void HeartBeatFailed(TaskId taskId, int errCode);
+    void HeartBeatFailed(TaskId taskId, int errCode, const ErrorDetail &externalDetail);
 
-    void SetTaskFailed(TaskId taskId, int errCode, const std::string &errorMessage = "");
-
-    void SetTaskErrorInfo(CloudTaskInfo &taskInfo, int errCode, const std::string &errorMessage) const;
+    void SetTaskFailed(TaskId taskId, int errCode, const std::string &errorMessage = "",
+        uint32_t detailCode = 0, const std::string &tableName = "");
 
     int SaveDatum(SyncParam &param, size_t idx, std::vector<std::pair<Key, size_t>> &deletedList,
         std::map<std::string, LogInfo> &localLogInfoCache, std::vector<VBucket> &localInfo);
@@ -331,7 +335,8 @@ protected:
 
     void MarkCurrentTaskPausedIfNeed(const CloudTaskInfo &taskInfo);
 
-    void SetCurrentTaskFailedWithoutLock(int errCode, const std::string &errorMessage = "");
+    void SetCurrentTaskFailedWithoutLock(int errCode, const std::string &errorMessage = "",
+        uint32_t detailCode = 0, const std::string &tableName = "");
 
     int LockCloudIfNeed(TaskId taskId);
 
@@ -396,7 +401,7 @@ protected:
     int BatchDelete(Info &deleteInfo, CloudSyncData &uploadData, InnerProcessInfo &innerProcessInfo);
 
     int DownloadAssetsOneByOne(const InnerProcessInfo &info, DownloadItem &downloadItem,
-        std::map<std::string, Assets> &downloadAssets);
+        std::map<std::string, Assets> &downloadAssets, ErrorDetail &errorDetail);
 
     std::pair<int, uint32_t> GetDBAssets(bool isSharedTable, const InnerProcessInfo &info,
         const DownloadItem &downloadItem, VBucket &dbAssets);
@@ -411,7 +416,7 @@ protected:
     bool CheckDownloadOrDeleteCode(int &errCode, int downloadCode, int deleteCode, DownloadItem &downloadItem);
 
     int DownloadAssetsOneByOneInner(bool isSharedTable, const InnerProcessInfo &info, DownloadItem &downloadItem,
-        std::map<std::string, Assets> &downloadAssets);
+        std::map<std::string, Assets> &downloadAssets, ErrorDetail &errorDetail);
 
     int CommitDownloadAssets(const DownloadItem &downloadItem, InnerProcessInfo &info,
         DownloadCommitList &commitList, uint32_t &successCount);
@@ -424,7 +429,7 @@ protected:
 
     void ChkIgnoredProcess(InnerProcessInfo &info, const CloudSyncData &uploadData, UploadParam &uploadParam);
 
-    int SaveCursorIfNeed(const std::string &tableName);
+    int SaveCursorIfNeed(const std::string &tableName, ErrorDetail &errorDetail);
 
     int PrepareAndDownload(const std::string &table, const CloudTaskInfo &taskInfo, bool isFirstDownload);
 
@@ -588,7 +593,7 @@ protected:
 
     int DoQueryAllGid(TaskId taskId, SyncParam &&param);
 
-    int DoUpdatePotentialCursorIfNeed(const std::string &table);
+    int DoUpdatePotentialCursorIfNeed(const std::string &table, ErrorDetail &errorDetail);
 
     int DownloadOneBatchGID(TaskId taskId, SyncParam &param);
 
@@ -631,6 +636,31 @@ protected:
     void MarkCurrentDownloadResetFinish();
     void MarkCurrentUploadResetFinish();
 
+    void NotifyDownloadAssetsFail(const std::string &tableName, const ErrorDetail &errorDetail);
+
+    void SetCurrentStage(SyncStage stage);
+
+    // stamp the stage maintained by the current notifier into a stage-less internal detail code
+    uint32_t StampDetailStageFromNotifier(uint32_t detailCode) const;
+
+    // caller must hold dataLock_: same as StampDetailStageFromNotifier for the failure write
+    // points which already run under the lock, so the stage is stamped where the failure
+    // happened instead of drifting with the later machine stages
+    uint32_t StampStageFromNotifierLocked(uint32_t detailCode) const;
+
+    // first-non-zero wins: errorMessage/detailCode are written only when the target is still empty
+    static void SetTaskErrorInfo(CloudTaskInfo &taskInfo, int errCode, const std::string &errorMessage,
+        uint32_t detailCode = 0);
+
+    // The cloud side guarantees its detail codes never enter the internal layout (bit22 set);
+    // a plain uint32 can still collide unexpectedly, do not block such codes, just log for locating
+    static void WarnIfExternalCodeCollides(uint32_t detailCode);
+
+    void FillCloudErrorInfoFromProxy(int errCode, const ErrorDetail &externalDetail, InnerProcessInfo &info) const;
+
+    ErrorDetail GetDownloadFailErrorDetail(int errCode, const std::string &tableName,
+        const InnerProcessInfo &info) const;
+
     mutable std::mutex dataLock_;
     TaskId lastTaskId_;
     std::multimap<int, TaskId, std::greater<int>> taskQueue_;
@@ -656,7 +686,9 @@ protected:
     std::map<TaskId, int32_t> failedHeartbeatCount_;
 
     std::string id_;
-
+    
+    AssetDownloadFailCallback assetDownloadFailCallback_;
+    mutable std::mutex assetDownloadFailCallbackMutex_;
     // isKvScene_ is used to distinguish between the KV and RDB in the following scenarios:
     // 1. Whether upload to the cloud after delete local data that does not have a gid.
     // 2. Whether the local data need update for different flag when the local time is larger.

@@ -730,6 +730,23 @@ distributeddb_unittest("DistributedDBCloudDBProxyTest") {
       [ "unittest/common/syncer/cloud/distributeddb_cloud_db_proxy_test.cpp" ]
 }
 
+distributeddb_unittest("DistributedDBCloudDBProxyErrorDetailTest") {
+  sources = [
+    "unittest/common/syncer/cloud/distributeddb_cloud_db_proxy_error_detail_test.cpp",
+  ]
+}
+
+distributeddb_unittest("DistributedDBCloudSyncerErrorDetailTest") {
+  sources = [
+    "unittest/common/syncer/cloud/distributeddb_cloud_syncer_error_detail_test.cpp",
+  ]
+}
+
+distributeddb_unittest("DistributedDBDbErrnoDetailTest") {
+  sources =
+      [ "unittest/common/syncer/cloud/distributeddb_db_errno_detail_test.cpp" ]
+}
+
 distributeddb_unittest("DistributedDBCloudAssetCompareTest") {
   sources = [
     "unittest/common/syncer/cloud/distributeddb_cloud_asset_compare_test.cpp",
@@ -1142,6 +1159,7 @@ group("unittest") {
     ":DistributedDBCloudAsyncDownloadAssetsTest",
     ":DistributedDBCloudCheckSyncTest",
     ":DistributedDBCloudDBProxyTest",
+    ":DistributedDBCloudDBProxyErrorDetailTest",
     ":DistributedDBCloudInterfacesReferenceTest",
     ":DistributedDBCloudInterfacesRelationalExtClientTest",
     ":DistributedDBCloudInterfacesRelationalExtTest",
@@ -1160,6 +1178,7 @@ group("unittest") {
     ":DistributedDBCloudSyncerDownloadAssetsOnlyTest",
     ":DistributedDBCloudSyncerDownloadAssetsTest",
     ":DistributedDBCloudSyncerDownloadTest",
+    ":DistributedDBCloudSyncerErrorDetailTest",
     ":DistributedDBCloudSyncerLockTest",
     ":DistributedDBCloudSyncerProgressManagerTest",
     ":DistributedDBCloudSyncerUploadTest",
@@ -1173,6 +1192,7 @@ group("unittest") {
     ":DistributedDBCommunicatorTest",
     ":DistributedDBDataCompressionTest",
     ":DistributedDBDataTransformerTest",
+    ":DistributedDBDbErrnoDetailTest",
     ":DistributedDBDeviceIdentifierTest",
     ":DistributedDBEventLoopTimerTest",
     ":DistributedDBFilePackageTest",
