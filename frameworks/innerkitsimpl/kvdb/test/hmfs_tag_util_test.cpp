@@ -418,6 +418,7 @@ HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ClearDbFileTags_InvalidPath_001, TestSize.
 
 HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ClearDbFileTags_ErrnoPreserved_001, TestSize.Level0)
 {
+    const std::string dbPath = DbDir() + "/" + TEST_FILE_NAME;
     std::string probePath = TestDir() + "/" + MISSING_PROBE_FILE;
     int probeFd = open(probePath.c_str(), O_RDONLY | O_CLOEXEC);
     if (probeFd >= 0) {
@@ -427,7 +428,7 @@ HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ClearDbFileTags_ErrnoPreserved_001, TestSi
     const int expectedErrno = errno;
     ASSERT_EQ(expectedErrno, ENOENT);
     gIoctlFail = true;
-    HmfsTagUtil::ClearDbFileTags(DbDir() + "/" + TEST_FILE_NAME);
+    HmfsTagUtil::ClearDbFileTags(dbPath);
     EXPECT_EQ(errno, expectedErrno);
     EXPECT_EQ(gRequests.size(), EXPECTED_DB_FILE_COUNT);
     EXPECT_TRUE(gGetFiles.empty());
