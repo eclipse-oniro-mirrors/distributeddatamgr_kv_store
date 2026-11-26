@@ -588,6 +588,42 @@ HWTEST_F(StoreManagerMockTest, GetKVStore_DumpStackFlagDisabled_PassedToAfterCre
     EXPECT_FALSE(KVDBServiceClientMock::afterCreateDumpStackOnFileDeletion);
 }
 
+HWTEST_F(StoreManagerMockTest, GetKVStoreAndRestore_DumpStackOptionMatrix_001, TestSize.Level0)
+{
+    const bool optionMatrix[][3] = {
+        { true, false, false },
+        { false, true, false },
+        { false, false, true },
+        { false, false, false },
+    };
+    AppId appId = { APP_ID };
+    auto service = std::make_shared<KVDBServiceClient>(nullptr);
+    KVDBServiceClientMock::status = SUCCESS;
+    EXPECT_CALL(*kVDBServiceClientMock, GetInstance())
+        .WillRepeatedly(Return(service));
+    EXPECT_CALL(*taskExecutorMock, Execute(_))
+        .Times(AtLeast(1))
+        .WillRepeatedly(Return(TaskExecutor::INVALID_TASK_ID));
+
+    int index = 0;
+    for (const auto &flags : optionMatrix) {
+        StoreId storeId = { std::string("DumpStackBranchMatrix") + std::to_string(index++) };
+        auto options = GetDefaultOptions();
+        options.syncable = flags[0];
+        options.backup = flags[1];
+        options.dumpStackOnFileDeletion = flags[2];
+        Status status = ILLEGAL_STATE;
+        auto kvStore = StoreManager::GetInstance().GetKVStore(appId, storeId, options, status);
+        ASSERT_EQ(status, SUCCESS);
+        ASSERT_NE(kvStore, nullptr);
+        Status restoreStatus = kvStore->Restore("missing_dump_stack_backup", options.baseDir);
+        EXPECT_NE(restoreStatus, SUCCESS);
+        kvStore = nullptr;
+        (void)StoreManager::GetInstance().CloseKVStore(appId, storeId);
+        (void)StoreManager::GetInstance().Delete(appId, storeId, options.baseDir);
+    }
+}
+
 HWTEST_F(StoreManagerMockTest, OptionsMarshalling_DumpStackFlag_RoundTrip, TestSize.Level1)
 {
     Options enabled;

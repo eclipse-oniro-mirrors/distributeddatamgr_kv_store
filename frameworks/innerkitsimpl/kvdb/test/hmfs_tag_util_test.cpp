@@ -55,7 +55,6 @@ std::vector<std::string> gRequests;
 std::vector<std::string> gTaggedFileNames;
 bool gTaggedFiles = false;
 bool gIoctlFail = false;
-int gLastIoctlErrno = 0;
 
 void ResetIoctlState()
 {
@@ -66,7 +65,6 @@ void ResetIoctlState()
     gTaggedFileNames.clear();
     gTaggedFiles = false;
     gIoctlFail = false;
-    gLastIoctlErrno = 0;
 }
 
 std::string DirOfFd(int fd)
@@ -136,7 +134,6 @@ extern "C" int __wrap_ioctl(int fd, unsigned long request, ...) /* NOLINT */
     gRequests.push_back(fileName);
     if (gIoctlFail) {
         errno = EACCES;
-        gLastIoctlErrno = errno;
         return -1;
     }
     if (cmd == HMFS_GET_FLAGS) {
@@ -428,10 +425,9 @@ HWTEST_F(HmfsTagUtilTest, HmfsTagUtil_ClearDbFileTags_ErrnoPreserved_001, TestSi
     }
     ASSERT_EQ(probeFd, -1);
     const int expectedErrno = errno;
-    ASSERT_TRUE(expectedErrno != 0);
+    ASSERT_EQ(expectedErrno, ENOENT);
     gIoctlFail = true;
     HmfsTagUtil::ClearDbFileTags(DbDir() + "/" + TEST_FILE_NAME);
-    EXPECT_EQ(gLastIoctlErrno, EACCES);
     EXPECT_EQ(errno, expectedErrno);
     EXPECT_EQ(gRequests.size(), EXPECTED_DB_FILE_COUNT);
     EXPECT_TRUE(gGetFiles.empty());
