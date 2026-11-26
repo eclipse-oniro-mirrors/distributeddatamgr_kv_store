@@ -391,6 +391,9 @@ std::shared_ptr<SingleStoreImpl> SingleStoreImplMockTest::CreateKVStore(bool aut
     options.backup = backup;
     options.syncable = isSyncable;
     auto dbManager = storeFactory->GetDBManager(options.baseDir, appId);
+    if (dbManager == nullptr) {
+        return nullptr;
+    }
     auto dbPassword = SecurityManager::GetInstance().GetDBPassword(storeId.storeId, options.baseDir, options.encrypt);
     DBStatus dbStatus = DBStatus::DB_ERROR;
     dbManager->GetKvStore(storeId, storeFactory->GetDBOption(options, dbPassword),
@@ -1280,7 +1283,7 @@ HWTEST_F(SingleStoreImplMockTest, Restore_001, testing::ext::TestSize.Level1)
 * @tc.type: FUNC
 * @tc.require:
 */
-HWTEST_F(SingleStoreImplMockTest, Restore_002, testing::ext::TestSize.Level1)
+HWTEST_F(SingleStoreImplMockTest, Restore_002, testing::ext::TestSize.Level0)
 {
     GTEST_LOG_(INFO) << "SingleStoreImplMockTest-begin Restore_002";
     try {

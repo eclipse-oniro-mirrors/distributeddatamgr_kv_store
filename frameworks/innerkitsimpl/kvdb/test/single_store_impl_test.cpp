@@ -47,6 +47,12 @@ std::vector<uint8_t> Random(int32_t len)
     return std::vector<uint8_t>(len, 'a');
 }
 
+struct DumpStackFlagCase {
+    bool syncable;
+    bool backup;
+    bool dumpStackOnFileDeletion;
+};
+
 class SingleStoreImplTest : public testing::Test {
 public:
     class TestObserver : public KvStoreObserver {
@@ -80,6 +86,8 @@ public:
 
     void SetNativeTokenId();
     std::shared_ptr<SingleKvStore> CreateKVStore(std::string storeIdTest, KvStoreType type, bool encrypt, bool backup);
+    std::shared_ptr<SingleKvStore> CreateKVStoreForDumpStack(const std::string &storeIdTest, bool syncable,
+        bool backup, bool dumpStackOnFileDeletion);
     std::shared_ptr<SingleStoreImpl> CreateKVStore(bool autosync = false);
     std::shared_ptr<SingleKvStore> kvStore_;
     static inline std::shared_ptr<StoreFactory> storeFactory = nullptr;
@@ -138,6 +146,26 @@ std::shared_ptr<SingleKvStore> SingleStoreImplTest::CreateKVStore(
     AppId appId = { "SingleStoreImplTest" };
     StoreId storeId = { storeIdTest };
     Status status = StoreManager::GetInstance().Delete(appId, storeId, options.baseDir);
+    return StoreManager::GetInstance().GetKVStore(appId, storeId, options, status);
+}
+
+std::shared_ptr<SingleKvStore> SingleStoreImplTest::CreateKVStoreForDumpStack(const std::string &storeIdTest,
+    bool syncable, bool backup, bool dumpStackOnFileDeletion)
+{
+    Options options;
+    options.kvStoreType = SINGLE_VERSION;
+    options.securityLevel = S1;
+    options.encrypt = false;
+    options.area = EL1;
+    options.syncable = syncable;
+    options.backup = backup;
+    options.dumpStackOnFileDeletion = dumpStackOnFileDeletion;
+    options.baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
+
+    AppId appId = { "SingleStoreImplTest" };
+    StoreId storeId = { storeIdTest };
+    (void)StoreManager::GetInstance().Delete(appId, storeId, options.baseDir);
+    Status status = ERROR;
     return StoreManager::GetInstance().GetKVStore(appId, storeId, options, status);
 }
 
@@ -2770,4 +2798,51 @@ HWTEST_F(SingleStoreImplTest, GetPageSize003, TestSize.Level1)
     status = StoreManager::GetInstance().Delete(appId, storeId, baseDir);
     ASSERT_EQ(status, SUCCESS);
 }
+
+HWTEST_F(SingleStoreImplTest, DumpStackOnFileDeletion_ConstructorBranchMatrix_001, TestSize.Level0)
+{
+    const DumpStackFlagCase matrix[] = {
+        { true, false, false },
+        { false, true, false },
+        { false, false, true },
+        { false, false, false },
+    };
+    AppId appId = { "SingleStoreImplTest" };
+    std::string baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
+    int index = 0;
+    for (const auto &flags : matrix) {
+        std::string storeIdName = std::string("DumpStackConstructor") + std::to_string(index++);
+        auto store = CreateKVStoreForDumpStack(storeIdName, flags.syncable, flags.backup,
+            flags.dumpStackOnFileDeletion);
+        ASSERT_NE(store, nullptr);
+        store = nullptr;
+        (void)StoreManager::GetInstance().CloseKVStore(appId, { storeIdName });
+        (void)StoreManager::GetInstance().Delete(appId, { storeIdName }, baseDir);
+    }
+}
+
+HWTEST_F(SingleStoreImplTest, DumpStackOnFileDeletion_RestoreBranchMatrix_001, TestSize.Level0)
+{
+    const DumpStackFlagCase matrix[] = {
+        { true, false, false },
+        { false, true, false },
+        { false, false, true },
+        { false, false, false },
+    };
+    AppId appId = { "SingleStoreImplTest" };
+    std::string baseDir = "/data/service/el1/public/database/SingleStoreImplTest";
+    int index = 0;
+    for (const auto &flags : matrix) {
+        std::string storeIdName = std::string("DumpStackRestore") + std::to_string(index++);
+        auto store = CreateKVStoreForDumpStack(storeIdName, flags.syncable, flags.backup,
+            flags.dumpStackOnFileDeletion);
+        ASSERT_NE(store, nullptr);
+        Status status = store->Restore("not_exist_backup", baseDir);
+        EXPECT_NE(status, SUCCESS);
+        store = nullptr;
+        (void)StoreManager::GetInstance().CloseKVStore(appId, { storeIdName });
+        (void)StoreManager::GetInstance().Delete(appId, { storeIdName }, baseDir);
+    }
+}
+
 } // namespace OHOS::Test
