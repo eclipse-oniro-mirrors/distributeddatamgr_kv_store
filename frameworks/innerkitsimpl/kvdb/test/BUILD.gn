@@ -48,6 +48,14 @@ config("module_private_config") {
 ###############################################################################
 ohos_source_set("kvdb_hmfs_tag_util_src") {
   testonly = true
+
+  sanitize = {
+    boundary_sanitize = true
+    cfi = true
+    cfi_cross_dso = true
+    debug = false
+  }
+
   sources = [ "../src/hmfs_tag_util.cpp" ]
   configs = [ ":module_private_config" ]
   subsystem_name = "distributeddatamgr"
