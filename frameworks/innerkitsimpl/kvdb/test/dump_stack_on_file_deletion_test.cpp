@@ -43,24 +43,30 @@ struct HmfsKeyFileArgs {
     uint32_t flags;
 };
 
+struct DumpStackFlagCase {
+    bool syncable;
+    bool backup;
+    bool dumpStackOnFileDeletion;
+};
+
 constexpr uint32_t HMFS_GET_FLAGS = static_cast<uint32_t>(_IOWR(HMFS_IOCTL_MAGIC, 73, HmfsKeyFileArgs));
 constexpr uint32_t HMFS_CLEAR_FLAGS = static_cast<uint32_t>(_IOW(HMFS_IOCTL_MAGIC, 74, HmfsKeyFileArgs));
 
-std::vector<std::string> gGetFiles;
-std::vector<std::string> gGetPaths;
-std::vector<std::string> gClearFiles;
-std::vector<std::string> gRequests;
-bool gTaggedFiles = false;
-bool gIoctlFail = false;
+std::vector<std::string> g_getFiles;
+std::vector<std::string> g_getPaths;
+std::vector<std::string> g_clearFiles;
+std::vector<std::string> g_requests;
+bool g_taggedFiles = false;
+bool g_ioctlFail = false;
 
 void ResetIoctlState()
 {
-    gGetFiles.clear();
-    gGetPaths.clear();
-    gClearFiles.clear();
-    gRequests.clear();
-    gTaggedFiles = false;
-    gIoctlFail = false;
+    g_getFiles.clear();
+    g_getPaths.clear();
+    g_clearFiles.clear();
+    g_requests.clear();
+    g_taggedFiles = false;
+    g_ioctlFail = false;
 }
 
 std::string DirOfFd(int fd)
@@ -117,18 +123,18 @@ extern "C" int __wrap_ioctl(int fd, unsigned long request, ...) /* NOLINT */
         return -1;
     }
     std::string fileName(hmfsArgs->filename);
-    gRequests.push_back(fileName);
-    if (gIoctlFail) {
+    g_requests.push_back(fileName);
+    if (g_ioctlFail) {
         errno = EACCES;
         return -1;
     }
     if (cmd == HMFS_GET_FLAGS) {
-        gGetFiles.push_back(fileName);
-        gGetPaths.push_back(DirOfFd(fd) + "/" + fileName);
-        hmfsArgs->flags = gTaggedFiles ? 1 : 0;
+        g_getFiles.push_back(fileName);
+        g_getPaths.push_back(DirOfFd(fd) + "/" + fileName);
+        hmfsArgs->flags = g_taggedFiles ? 1 : 0;
         return 0;
     }
-    gClearFiles.push_back(fileName);
+    g_clearFiles.push_back(fileName);
     return 0;
 }
 
@@ -252,15 +258,15 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, GetOrOpenStore_ClearBeforeOpen_001, Test
     CloseStore(storeIdName);
     kvStore = nullptr;
     ResetIoctlState();
-    gTaggedFiles = true;
+    g_taggedFiles = true;
     status = ERROR;
     auto reopenedStore = OpenStore(storeIdName, true, status);
     ASSERT_EQ(status, SUCCESS);
     ASSERT_NE(reopenedStore, nullptr);
     EXPECT_TRUE(HasServiceAcl(DbFilePath(storeIdName)));
-    EXPECT_EQ(gGetPaths, ExpectedPaths(storeIdName));
-    EXPECT_EQ(gClearFiles, ExpectedFileNames());
-    EXPECT_EQ(gRequests.size(), 12U);
+    EXPECT_EQ(g_getPaths, ExpectedPaths(storeIdName));
+    EXPECT_EQ(g_clearFiles, ExpectedFileNames());
+    EXPECT_EQ(g_requests.size(), 12U);
     CloseStore(storeIdName);
     reopenedStore = nullptr;
     (void)DeleteStore(storeIdName);
@@ -275,15 +281,15 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, GetOrOpenStore_CacheHitNoClear_001, Test
     ASSERT_NE(kvStore, nullptr);
     EXPECT_FALSE(HasServiceAcl(DbFilePath(storeIdName)));
     ResetIoctlState();
-    gTaggedFiles = true;
+    g_taggedFiles = true;
     Status hitStatus = ERROR;
     auto sameStore = OpenStore(storeIdName, false, hitStatus);
     ASSERT_EQ(hitStatus, SUCCESS);
     ASSERT_NE(sameStore, nullptr);
     EXPECT_EQ(sameStore.get(), kvStore.get());
-    EXPECT_TRUE(gRequests.empty());
-    EXPECT_TRUE(gGetPaths.empty());
-    EXPECT_TRUE(gClearFiles.empty());
+    EXPECT_TRUE(g_requests.empty());
+    EXPECT_TRUE(g_getPaths.empty());
+    EXPECT_TRUE(g_clearFiles.empty());
     CloseStore(storeIdName);
     kvStore = nullptr;
     sameStore = nullptr;
@@ -324,12 +330,12 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, DeleteKvStore_ClearBeforeDelete_001, Tes
     CloseStore(storeIdName);
     kvStore = nullptr;
     ResetIoctlState();
-    gTaggedFiles = true;
+    g_taggedFiles = true;
     Status deleteStatus = DeleteStore(storeIdName);
     ASSERT_EQ(deleteStatus, SUCCESS);
-    EXPECT_EQ(gGetPaths, ExpectedPaths(storeIdName));
-    EXPECT_EQ(gClearFiles, ExpectedFileNames());
-    EXPECT_EQ(gRequests.size(), 12U);
+    EXPECT_EQ(g_getPaths, ExpectedPaths(storeIdName));
+    EXPECT_EQ(g_clearFiles, ExpectedFileNames());
+    EXPECT_EQ(g_requests.size(), 12U);
     EXPECT_NE(access(DbFilePath(storeIdName).c_str(), F_OK), 0);
 }
 
@@ -343,12 +349,12 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, DeleteKvStore_IoctlFailStillDeletes_001,
     CloseStore(storeIdName);
     kvStore = nullptr;
     ResetIoctlState();
-    gTaggedFiles = true;
-    gIoctlFail = true;
+    g_taggedFiles = true;
+    g_ioctlFail = true;
     Status deleteStatus = DeleteStore(storeIdName);
     ASSERT_EQ(deleteStatus, SUCCESS);
-    EXPECT_EQ(gRequests.size(), 6U);
-    EXPECT_TRUE(gClearFiles.empty());
+    EXPECT_EQ(g_requests.size(), 6U);
+    EXPECT_TRUE(g_clearFiles.empty());
     EXPECT_NE(access(DbFilePath(storeIdName).c_str(), F_OK), 0);
 }
 
@@ -360,13 +366,13 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_ClearBeforeImport_001, TestSize.
     ASSERT_EQ(status, SUCCESS);
     ASSERT_NE(kvStore, nullptr);
     ResetIoctlState();
-    gTaggedFiles = true;
+    g_taggedFiles = true;
     Status restoreStatus = kvStore->Restore("not_exist_backup", TEST_BASE_DIR);
     EXPECT_NE(restoreStatus, SUCCESS);
     EXPECT_TRUE(HasServiceAcl(DbFilePath(storeIdName)));
-    EXPECT_EQ(gGetPaths, ExpectedPaths(storeIdName));
-    EXPECT_EQ(gClearFiles, ExpectedFileNames());
-    EXPECT_EQ(gRequests.size(), 12U);
+    EXPECT_EQ(g_getPaths, ExpectedPaths(storeIdName));
+    EXPECT_EQ(g_clearFiles, ExpectedFileNames());
+    EXPECT_EQ(g_requests.size(), 12U);
     CloseStore(storeIdName);
     kvStore = nullptr;
     (void)DeleteStore(storeIdName);
@@ -380,12 +386,12 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_IoctlFailKeepsResult_001, TestSi
     ASSERT_EQ(status, SUCCESS);
     ASSERT_NE(kvStore, nullptr);
     ResetIoctlState();
-    gTaggedFiles = true;
-    gIoctlFail = true;
+    g_taggedFiles = true;
+    g_ioctlFail = true;
     Status restoreStatus = kvStore->Restore("not_exist_backup", TEST_BASE_DIR);
     EXPECT_NE(restoreStatus, SUCCESS);
-    EXPECT_EQ(gRequests.size(), 6U);
-    EXPECT_TRUE(gClearFiles.empty());
+    EXPECT_EQ(g_requests.size(), 6U);
+    EXPECT_TRUE(g_clearFiles.empty());
     CloseStore(storeIdName);
     kvStore = nullptr;
     (void)DeleteStore(storeIdName);
@@ -399,12 +405,12 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_Syncable_ClearBeforeImport_001, 
     ASSERT_EQ(status, SUCCESS);
     ASSERT_NE(kvStore, nullptr);
     ResetIoctlState();
-    gTaggedFiles = true;
+    g_taggedFiles = true;
     Status restoreStatus = kvStore->Restore("not_exist_backup", TEST_BASE_DIR);
     EXPECT_NE(restoreStatus, SUCCESS);
-    EXPECT_EQ(gGetPaths, ExpectedPaths(storeIdName));
-    EXPECT_EQ(gClearFiles, ExpectedFileNames());
-    EXPECT_EQ(gRequests.size(), 12U);
+    EXPECT_EQ(g_getPaths, ExpectedPaths(storeIdName));
+    EXPECT_EQ(g_clearFiles, ExpectedFileNames());
+    EXPECT_EQ(g_requests.size(), 12U);
     CloseStore(storeIdName);
     kvStore = nullptr;
     (void)DeleteStore(storeIdName);
@@ -418,13 +424,13 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_Backup_ClearBeforeImport_001, Te
     ASSERT_EQ(status, SUCCESS);
     ASSERT_NE(kvStore, nullptr);
     ResetIoctlState();
-    gTaggedFiles = true;
+    g_taggedFiles = true;
     Status restoreStatus = kvStore->Restore("not_exist_backup", TEST_BASE_DIR);
     EXPECT_NE(restoreStatus, SUCCESS);
     EXPECT_TRUE(HasServiceAcl(DbFilePath(storeIdName)));
-    EXPECT_EQ(gGetPaths, ExpectedPaths(storeIdName));
-    EXPECT_EQ(gClearFiles, ExpectedFileNames());
-    EXPECT_EQ(gRequests.size(), 12U);
+    EXPECT_EQ(g_getPaths, ExpectedPaths(storeIdName));
+    EXPECT_EQ(g_clearFiles, ExpectedFileNames());
+    EXPECT_EQ(g_requests.size(), 12U);
     CloseStore(storeIdName);
     kvStore = nullptr;
     (void)DeleteStore(storeIdName);
@@ -438,13 +444,13 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_FlagFalse_ClearBeforeImport_001,
     ASSERT_EQ(status, SUCCESS);
     ASSERT_NE(kvStore, nullptr);
     ResetIoctlState();
-    gTaggedFiles = true;
+    g_taggedFiles = true;
     Status restoreStatus = kvStore->Restore("not_exist_backup", TEST_BASE_DIR);
     EXPECT_NE(restoreStatus, SUCCESS);
     EXPECT_FALSE(HasServiceAcl(DbFilePath(storeIdName)));
-    EXPECT_EQ(gGetPaths, ExpectedPaths(storeIdName));
-    EXPECT_EQ(gClearFiles, ExpectedFileNames());
-    EXPECT_EQ(gRequests.size(), 12U);
+    EXPECT_EQ(g_getPaths, ExpectedPaths(storeIdName));
+    EXPECT_EQ(g_clearFiles, ExpectedFileNames());
+    EXPECT_EQ(g_requests.size(), 12U);
     CloseStore(storeIdName);
     kvStore = nullptr;
     (void)DeleteStore(storeIdName);
@@ -460,16 +466,64 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, OpenStore_FlagFalse_ClearsStaleTags_001,
     CloseStore(storeIdName);
     kvStore = nullptr;
     ResetIoctlState();
-    gTaggedFiles = true;
+    g_taggedFiles = true;
     status = ERROR;
     auto reopenedStore = OpenStore(storeIdName, false, status);
     ASSERT_EQ(status, SUCCESS);
     ASSERT_NE(reopenedStore, nullptr);
-    EXPECT_EQ(gGetPaths, ExpectedPaths(storeIdName));
-    EXPECT_EQ(gClearFiles, ExpectedFileNames());
-    EXPECT_EQ(gRequests.size(), 12U);
+    EXPECT_EQ(g_getPaths, ExpectedPaths(storeIdName));
+    EXPECT_EQ(g_clearFiles, ExpectedFileNames());
+    EXPECT_EQ(g_requests.size(), 12U);
     CloseStore(storeIdName);
     reopenedStore = nullptr;
     (void)DeleteStore(storeIdName);
+}
+
+HWTEST_F(KvDumpStackOnFileDeletionTest, Constructor_DumpStackFlagMatrix_001, TestSize.Level0)
+{
+    const DumpStackFlagCase matrix[] = {
+        { true, false, false },
+        { false, true, false },
+        { false, false, true },
+        { false, false, false },
+    };
+    int index = 0;
+    for (const auto &flags : matrix) {
+        std::string storeIdName = std::string("DumpStackConstructor") + std::to_string(index++);
+        Status status = ERROR;
+        auto store = OpenStore(storeIdName, flags.dumpStackOnFileDeletion, status,
+            flags.syncable, flags.backup);
+        EXPECT_EQ(status, SUCCESS);
+        EXPECT_NE(store, nullptr);
+        store = nullptr;
+        CloseStore(storeIdName);
+        (void)DeleteStore(storeIdName);
+    }
+}
+
+HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_DumpStackFlagMatrix_001, TestSize.Level0)
+{
+    const DumpStackFlagCase matrix[] = {
+        { true, false, false },
+        { false, true, false },
+        { false, false, true },
+        { false, false, false },
+    };
+    int index = 0;
+    for (const auto &flags : matrix) {
+        std::string storeIdName = std::string("DumpStackRestore") + std::to_string(index++);
+        Status status = ERROR;
+        auto store = OpenStore(storeIdName, flags.dumpStackOnFileDeletion, status,
+            flags.syncable, flags.backup);
+        EXPECT_EQ(status, SUCCESS);
+        EXPECT_NE(store, nullptr);
+        if (store != nullptr) {
+            Status restoreStatus = store->Restore("not_exist_backup", BaseDir());
+            EXPECT_EQ(restoreStatus, INVALID_ARGUMENT);
+            store = nullptr;
+        }
+        CloseStore(storeIdName);
+        (void)DeleteStore(storeIdName);
+    }
 }
 }
