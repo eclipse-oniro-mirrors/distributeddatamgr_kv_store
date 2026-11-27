@@ -56,7 +56,7 @@ ohos_source_set("kvdb_hmfs_tag_util_src") {
     debug = false
   }
 
-  sources = [ "../src/hmfs_tag_util.cpp" ]
+  sources = [ "../src/kv_hmfs_tag_util.cpp" ]
   configs = [ ":module_private_config" ]
   subsystem_name = "distributeddatamgr"
   part_name = "kv_store"
@@ -268,7 +268,7 @@ ohos_unittest("KvDumpStackOnFileDeletionTest") {
   module_out_path = module_output_path
 
   sources = [
-    "../../kvdb/src/kv_hiview_reporter_mock.cpp",
+    "../../kvdb/src/kv_hiview_reporter.cpp",
     "dump_stack_on_file_deletion_test.cpp",
   ]
 
@@ -281,6 +281,7 @@ ohos_unittest("KvDumpStackOnFileDeletionTest") {
   ]
   external_deps += external_deps_safwk
   external_deps += external_deps_hilog
+  external_deps += external_deps_hisysevent
   external_deps += external_deps_ipc_single
   external_deps += external_deps_samgr
 
@@ -296,6 +297,7 @@ ohos_unittest("KvDumpStackOnFileDeletionTest") {
   ]
   deps += deps_safwk
   deps += deps_hilog
+  deps += deps_hisysevent
   deps += deps_ipc_single
   deps += deps_samgr
 }
@@ -597,7 +599,6 @@ ohos_unittest("StoreFactoryMockTest") {
   }
   configs = [ ":module_private_config" ]
   deps = [
-    ":kvdb_hmfs_tag_util_src",
     "${kv_store_base_path}/frameworks/libs/distributeddb/:distributeddb",
     "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_inner",
     "${kv_store_base_path}/interfaces/innerkits/distributeddatamgr:distributeddata_mgr",
@@ -695,7 +696,6 @@ ohos_unittest("SingleStoreImplMockTest") {
   configs = [ ":module_private_config" ]
 
   deps = [
-    ":kvdb_hmfs_tag_util_src",
     "${kv_store_base_path}/frameworks/libs/distributeddb/:distributeddb",
     "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_client_sync",
     "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_inner",
@@ -842,7 +842,6 @@ ohos_unittest("StoreManagerMockTest") {
   configs = [ ":module_private_config" ]
 
   deps = [
-    ":kvdb_hmfs_tag_util_src",
     "${kv_store_base_path}/frameworks/libs/distributeddb/:distributeddb",
     "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_client_sync",
     "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_inner",

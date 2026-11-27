@@ -154,6 +154,11 @@ bool StoreUtil::SetServiceGid(const std::string &)
     return true;
 }
 
+std::string StoreUtil::GetDBPath(const std::string &, const std::string &)
+{
+    return "";
+}
+
 std::string StoreUtil::GetStoreDir(const std::string &, const std::string &)
 {
     return "";

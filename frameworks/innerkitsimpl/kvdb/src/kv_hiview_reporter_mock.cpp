@@ -29,6 +29,10 @@ void KVDBFaultHiViewReporter::ReportKVRebuildEvent(const ReportInfo &reportInfo)
     return;
 }
 
+void KVDBFaultHiViewReporter::ClearDbFileTags(const std::string &, const std::string &)
+{
+}
+
 std::string KVDBFaultHiViewReporter::GetCurrentMicrosecondTimeFormat()
 {
     return "";

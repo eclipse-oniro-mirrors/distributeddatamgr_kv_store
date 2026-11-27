@@ -235,11 +235,16 @@ std::vector<StoreUtil::FileInfo> StoreUtil::GetFiles(const std::string &path)
     return fileInfos;
 }
 
-std::string StoreUtil::GetStoreDir(const std::string &baseDir, const std::string &storeId)
+std::string StoreUtil::GetDBPath(const std::string &baseDir, const std::string &storeId)
 {
     std::string storeDir;
     (void)DistributedDB::KvStoreDelegateManager::GetDatabaseDir(storeId, storeDir);
-    return baseDir + "/kvdb/" + storeDir + "/single_ver/";
+    return baseDir + "/kvdb/" + storeDir + "/";
+}
+
+std::string StoreUtil::GetStoreDir(const std::string &baseDir, const std::string &storeId)
+{
+    return GetDBPath(baseDir, storeId) + "single_ver/";
 }
 
 bool StoreUtil::Rename(const std::string &oldName, const std::string &newName)

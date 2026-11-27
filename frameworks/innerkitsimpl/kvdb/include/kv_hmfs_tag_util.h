@@ -13,16 +13,18 @@
  * limitations under the License.
  */
 
-#ifndef OHOS_DISTRIBUTED_DATA_FRAMEWORKS_KVDB_HMFS_TAG_UTIL_H
-#define OHOS_DISTRIBUTED_DATA_FRAMEWORKS_KVDB_HMFS_TAG_UTIL_H
+#ifndef OHOS_DISTRIBUTED_DATA_FRAMEWORKS_KVDB_KV_HMFS_TAG_UTIL_H
+#define OHOS_DISTRIBUTED_DATA_FRAMEWORKS_KVDB_KV_HMFS_TAG_UTIL_H
 
 #include <cstdint>
 #include <string>
 
 namespace OHOS::DistributedKv {
-class HmfsTagUtil final {
+class KvHmfsTagUtil final {
 public:
     static constexpr int FLAG_SET = 1; /* NOLINT */
+
+    static int SetKeyFileFlag(const std::string &path);
 
     static int GetKeyFileFlag(const std::string &path);
 
@@ -36,6 +38,8 @@ private:
 
     static bool IsValidFileName(const std::string &fileName);
 
+    static int SetKeyFileFlag(int dirFd, const std::string &fileName);
+
     static int GetKeyFileFlag(int dirFd, const std::string &fileName);
 
     static int ClearKeyFileFlag(int dirFd, const std::string &fileName);
@@ -43,6 +47,8 @@ private:
     static int ExecuteIoctl(int dirFd, unsigned long cmd, const std::string &fileName, uint32_t *outFlags);
 
     static int ExecuteByPath(unsigned long cmd, const std::string &path, uint32_t *outFlags);
+
+    static int NegateErrno(int err);
 };
 } // namespace OHOS::DistributedKv
-#endif // OHOS_DISTRIBUTED_DATA_FRAMEWORKS_KVDB_HMFS_TAG_UTIL_H
+#endif // OHOS_DISTRIBUTED_DATA_FRAMEWORKS_KVDB_KV_HMFS_TAG_UTIL_H

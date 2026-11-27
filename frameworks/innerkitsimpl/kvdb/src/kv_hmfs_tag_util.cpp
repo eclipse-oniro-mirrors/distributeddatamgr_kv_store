@@ -13,8 +13,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "HmfsTagUtil"
-#include "hmfs_tag_util.h"
+#include "kv_hmfs_tag_util.h"
 
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -33,6 +32,7 @@ struct HmfsKeyFileArgs {
     uint32_t flags;
 };
 
+constexpr unsigned long HMFS_SET_FLAGS = _IOW(HMFS_IOCTL_MAGIC, 72, HmfsKeyFileArgs);
 constexpr unsigned long HMFS_GET_FLAGS = _IOWR(HMFS_IOCTL_MAGIC, 73, HmfsKeyFileArgs);
 constexpr unsigned long HMFS_CLEAR_FLAGS = _IOW(HMFS_IOCTL_MAGIC, 74, HmfsKeyFileArgs);
 
@@ -48,7 +48,12 @@ private:
 };
 } // namespace
 
-bool HmfsTagUtil::IsValidFileName(const std::string &fileName)
+int KvHmfsTagUtil::NegateErrno(int err)
+{
+    return (err == 0) ? -EIO : -err;
+}
+
+bool KvHmfsTagUtil::IsValidFileName(const std::string &fileName)
 {
     if (fileName.empty() || fileName.length() > static_cast<size_t>(MAX_FILE_NAME_LEN)) {
         return false;
@@ -59,7 +64,7 @@ bool HmfsTagUtil::IsValidFileName(const std::string &fileName)
     return fileName.find('/') == std::string::npos;
 }
 
-int HmfsTagUtil::ExecuteIoctl(int dirFd, unsigned long cmd, const std::string &fileName, uint32_t *outFlags)
+int KvHmfsTagUtil::ExecuteIoctl(int dirFd, unsigned long cmd, const std::string &fileName, uint32_t *outFlags)
 {
     if (!IsValidFileName(fileName)) {
         return -EINVAL;
@@ -68,7 +73,7 @@ int HmfsTagUtil::ExecuteIoctl(int dirFd, unsigned long cmd, const std::string &f
     fileName.copy(args.filename, sizeof(args.filename) - 1);
     args.filename[fileName.size()] = 0;
     if (ioctl(dirFd, cmd, &args) != 0) {
-        return -errno;
+        return NegateErrno(errno);
     }
     if (outFlags != nullptr) {
         *outFlags = args.flags;
@@ -76,7 +81,7 @@ int HmfsTagUtil::ExecuteIoctl(int dirFd, unsigned long cmd, const std::string &f
     return 0;
 }
 
-int HmfsTagUtil::ExecuteByPath(unsigned long cmd, const std::string &path, uint32_t *outFlags)
+int KvHmfsTagUtil::ExecuteByPath(unsigned long cmd, const std::string &path, uint32_t *outFlags)
 {
     if (path.empty()) {
         return -EINVAL;
@@ -89,7 +94,7 @@ int HmfsTagUtil::ExecuteByPath(unsigned long cmd, const std::string &path, uint3
     std::string fileName = path.substr(pos + 1);
     int dirFd = open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (dirFd < 0) {
-        return -errno;
+        return NegateErrno(errno);
     }
     uint64_t tag = fdsan_create_owner_tag(FDSAN_OWNER_TYPE_FILE, 0xD001650);
     fdsan_exchange_owner_tag(dirFd, 0, tag);
@@ -98,7 +103,12 @@ int HmfsTagUtil::ExecuteByPath(unsigned long cmd, const std::string &path, uint3
     return ret;
 }
 
-int HmfsTagUtil::GetKeyFileFlag(int dirFd, const std::string &fileName)
+int KvHmfsTagUtil::SetKeyFileFlag(int dirFd, const std::string &fileName)
+{
+    return ExecuteIoctl(dirFd, HMFS_SET_FLAGS, fileName, nullptr);
+}
+
+int KvHmfsTagUtil::GetKeyFileFlag(int dirFd, const std::string &fileName)
 {
     uint32_t flags = 0;
     int ret = ExecuteIoctl(dirFd, HMFS_GET_FLAGS, fileName, &flags);
@@ -108,12 +118,17 @@ int HmfsTagUtil::GetKeyFileFlag(int dirFd, const std::string &fileName)
     return (flags == static_cast<uint32_t>(FLAG_SET)) ? FLAG_SET : FLAG_UNSET;
 }
 
-int HmfsTagUtil::ClearKeyFileFlag(int dirFd, const std::string &fileName)
+int KvHmfsTagUtil::ClearKeyFileFlag(int dirFd, const std::string &fileName)
 {
     return ExecuteIoctl(dirFd, HMFS_CLEAR_FLAGS, fileName, nullptr);
 }
 
-int HmfsTagUtil::GetKeyFileFlag(const std::string &path)
+int KvHmfsTagUtil::SetKeyFileFlag(const std::string &path)
+{
+    return ExecuteByPath(HMFS_SET_FLAGS, path, nullptr);
+}
+
+int KvHmfsTagUtil::GetKeyFileFlag(const std::string &path)
 {
     uint32_t flags = 0;
     int ret = ExecuteByPath(HMFS_GET_FLAGS, path, &flags);
@@ -123,12 +138,12 @@ int HmfsTagUtil::GetKeyFileFlag(const std::string &path)
     return (flags == static_cast<uint32_t>(FLAG_SET)) ? FLAG_SET : FLAG_UNSET;
 }
 
-int HmfsTagUtil::ClearKeyFileFlag(const std::string &path)
+int KvHmfsTagUtil::ClearKeyFileFlag(const std::string &path)
 {
     return ExecuteByPath(HMFS_CLEAR_FLAGS, path, nullptr);
 }
 
-void HmfsTagUtil::ClearDbFileTags(const std::string &dbPath)
+void KvHmfsTagUtil::ClearDbFileTags(const std::string &dbPath)
 {
     ScopedErrno scopedErrno;
     static const char *suffixes[] = { "", "-wal", "-shm" };

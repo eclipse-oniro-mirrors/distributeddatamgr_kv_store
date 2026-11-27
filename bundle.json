@@ -184,6 +184,7 @@
           "header": {
             "header_files": [
               "distributeddata_kvdb_ipc_interface_code.h",
+              "kv_hmfs_tag_util.h",
               "kv_types_util.h",
               "kvdb_service.h"
             ],

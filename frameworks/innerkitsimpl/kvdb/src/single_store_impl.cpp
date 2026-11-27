@@ -22,7 +22,6 @@
 #include "backup_manager.h"
 #include "dds_trace.h"
 #include "dev_manager.h"
-#include "hmfs_tag_util.h"
 #include "ipc_skeleton.h"
 #include "kvdb_service_client.h"
 #include "log_print.h"
@@ -831,9 +830,7 @@ Status SingleStoreImpl::Restore(const std::string &file, const std::string &base
     if (service != nullptr) {
         service->Close({ appId_ }, { storeId_ }, subUser_);
     }
-    const std::string storePath = StoreUtil::GetStoreDir(path_, storeId_);
-    HmfsTagUtil::ClearDbFileTags(storePath + "main/gen_natural_store.db");
-    HmfsTagUtil::ClearDbFileTags(storePath + "meta/meta.db");
+    KVDBFaultHiViewReporter::ClearDbFileTags(path_, storeId_);
     BackupInfo info = { .name = file, .baseDir = baseDir, .appId = appId_, .storeId = storeId_,
         .encrypt = encrypt_, .isCheckIntegrity = isApplication_, .subUser = subUser_, .isCustomDir = isCustomDir_ };
     auto status = BackupManager::GetInstance().Restore(info, dbStore_);

@@ -65,7 +65,7 @@ old_source_config = [
 kvdb_source_config = [
   "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/backup_manager.cpp",
   "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/convertor.cpp",
-  "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/hmfs_tag_util.cpp",
+  "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/kv_hmfs_tag_util.cpp",
   "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/kv_types_util.cpp",
   "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/kvdb_service_client.cpp",
   "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/observer_bridge.cpp",

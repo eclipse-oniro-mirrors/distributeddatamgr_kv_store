@@ -74,6 +74,8 @@ public:
     static void ReportKVFaultEvent(const ReportInfo &reportInfo);
 
     static void ReportKVRebuildEvent(const ReportInfo &reportInfo);
+
+    static void ClearDbFileTags(const std::string &path, const std::string &storeId);
 private:
     static void ReportFaultEvent(KVDBFaultEvent eventInfo);
 

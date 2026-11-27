@@ -95,7 +95,6 @@ ohos_source_set("distributeddatafwk_src_file") {
   configs = [ ":module_private_config" ]
 
   deps = [
-    "../../kvdb/test:kvdb_hmfs_tag_util_src",
     "../../../../databaseutils:database_utils",
     "../../../../interfaces/innerkits/distributeddatamgr:distributeddata_mgr",
     "//foundation/distributeddatamgr/kv_store/frameworks/libs/distributeddb:distributeddb",

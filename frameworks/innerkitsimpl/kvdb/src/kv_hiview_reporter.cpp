@@ -25,6 +25,7 @@
 #include <unistd.h>
 #include "concurrent_map.h"
 #include "hisysevent_c.h"
+#include "kv_hmfs_tag_util.h"
 #include "log_print.h"
 #include "store_util.h"
 #include "types.h"
@@ -51,6 +52,7 @@ static constexpr const char *SHM_NAME = "SHM";
 static constexpr const char *SHM_PATH = "single_ver/main/gen_natural_store.db-shm";
 static constexpr const char *WAL_NAME = "WAL";
 static constexpr const char *WAL_PATH = "single_ver/main/gen_natural_store.db-wal";
+static constexpr const char *META_DB_PATH = "single_ver/meta/meta.db";
 std::set<std::string> KVDBFaultHiViewReporter::storeFaults_ = {};
 std::mutex KVDBFaultHiViewReporter::mutex_;
 
@@ -111,6 +113,13 @@ void KVDBFaultHiViewReporter::ReportKVRebuildEvent(const ReportInfo &reportInfo)
             return true;
         });
     }
+}
+
+void KVDBFaultHiViewReporter::ClearDbFileTags(const std::string &path, const std::string &storeId)
+{
+    std::string dbPath = GetDBPath(path, storeId);
+    KvHmfsTagUtil::ClearDbFileTags(dbPath + DB_PATH);
+    KvHmfsTagUtil::ClearDbFileTags(dbPath + META_DB_PATH);
 }
 
 void KVDBFaultHiViewReporter::ReportFaultEvent(KVDBFaultEvent eventInfo)
@@ -281,10 +290,7 @@ void KVDBFaultHiViewReporter::DeleteCorruptedFlag(const std::string &dbPath, con
 
 std::string KVDBFaultHiViewReporter::GetDBPath(const std::string &path, const std::string &storeId)
 {
-    std::string reporterDir = "";
-    DistributedDB::KvStoreDelegateManager::GetDatabaseDir(storeId, reporterDir);
-    reporterDir = path + "/kvdb/" + reporterDir + "/";
-    return reporterDir;
+    return StoreUtil::GetDBPath(path, storeId);
 }
 
 std::string KVDBFaultHiViewReporter::GetFileStatInfo(const std::string &filePath)
