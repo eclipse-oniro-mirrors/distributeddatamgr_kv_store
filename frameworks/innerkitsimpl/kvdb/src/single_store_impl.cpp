@@ -16,7 +16,6 @@
 #include "single_store_impl.h"
 
 #include <cerrno>
-#include <cstdint>
 #include "acl.h"
 #include "auto_sync_timer.h"
 #include "backup_manager.h"
@@ -1272,8 +1271,7 @@ void SingleStoreImpl::ReportDBFaultEvent(Status status, const std::string &funct
 
 bool SingleStoreImpl::NeedSetAcl() const
 {
-    return (static_cast<uint8_t>(syncable_) | static_cast<uint8_t>(autoBackup_) |
-        static_cast<uint8_t>(dumpStackOnFileDeletion_)) != 0;
+    return syncable_ || autoBackup_ || dumpStackOnFileDeletion_;
 }
 
 void SingleStoreImpl::SetAcl(const std::string &storeId, const std::string &path)
