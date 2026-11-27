@@ -39,11 +39,6 @@ using namespace std::chrono;
 using namespace DATABASE_UTILS;
 
 namespace {
-__attribute__((no_sanitize("bool"))) inline bool ReadBoolFlag(const bool &flag)
-{
-    return flag;
-}
-
 ExecutorPool &GetShrinkExecutorPool()
 {
     static ExecutorPool pool(1, 1, "KVDB_Shrink");
@@ -82,7 +77,7 @@ SingleStoreImpl::SingleStoreImpl(
     isSchemaStore_ = !options.schema.empty();
     isCustomDir_ = options.isCustomDir;
     isApplication_ = options.isApplication;
-    dumpStackOnFileDeletion_ = ReadBoolFlag(options.dumpStackOnFileDeletion);
+    dumpStackOnFileDeletion_ = options.dumpStackOnFileDeletion;
     if (NeedSetAcl()) {
         SetAcl(storeId_, path);
         if (autoBackup_) {
@@ -1278,7 +1273,7 @@ void SingleStoreImpl::ReportDBFaultEvent(Status status, const std::string &funct
     KVDBFaultHiViewReporter::ReportKVFaultEvent(reportInfo);
 }
 
-__attribute__((no_sanitize("bool"))) bool SingleStoreImpl::NeedSetAcl() const
+bool SingleStoreImpl::NeedSetAcl() const
 {
     return (static_cast<uint8_t>(syncable_) | static_cast<uint8_t>(autoBackup_) |
         static_cast<uint8_t>(dumpStackOnFileDeletion_)) != 0;
