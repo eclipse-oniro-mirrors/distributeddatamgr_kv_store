@@ -74,7 +74,6 @@ ohos_source_set("distributeddatafwk_src_file") {
   kvdb_sources = [
     "../../kvdb/src/backup_manager.cpp",
     "../../kvdb/src/convertor.cpp",
-    "../../kvdb/src/hmfs_tag_util.cpp",
     "../../kvdb/src/kv_types_util.cpp",
     "../../kvdb/src/kvdb_service_client.cpp",
     "../../kvdb/src/observer_bridge.cpp",
@@ -96,6 +95,7 @@ ohos_source_set("distributeddatafwk_src_file") {
   configs = [ ":module_private_config" ]
 
   deps = [
+    "../../kvdb/test:kvdb_hmfs_tag_util_src",
     "../../../../databaseutils:database_utils",
     "../../../../interfaces/innerkits/distributeddatamgr:distributeddata_mgr",
     "//foundation/distributeddatamgr/kv_store/frameworks/libs/distributeddb:distributeddb",

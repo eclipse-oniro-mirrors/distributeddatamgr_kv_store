@@ -158,6 +158,7 @@ std::shared_ptr<SingleKvStore> SingleStoreImplTest::CreateKVStoreForDumpStack(co
     options.securityLevel = S1;
     options.encrypt = false;
     options.area = EL1;
+    options.role = OWNER;
     options.syncable = syncable;
     options.backup = backup;
     options.dumpStackOnFileDeletion = dumpStackOnFileDeletion;
@@ -2817,7 +2818,7 @@ HWTEST_F(SingleStoreImplTest, DumpStackOnFileDeletion_ConstructorBranchMatrix_00
         std::string storeIdName = std::string("DumpStackConstructor") + std::to_string(index++);
         auto store = CreateKVStoreForDumpStack(storeIdName, flags.syncable, flags.backup,
             flags.dumpStackOnFileDeletion);
-        ASSERT_NE(store, nullptr);
+        EXPECT_NE(store, nullptr);
         store = nullptr;
         (void)StoreManager::GetInstance().CloseKVStore(appId, { storeIdName });
         (void)StoreManager::GetInstance().Delete(appId, { storeIdName }, baseDir);
@@ -2839,10 +2840,12 @@ HWTEST_F(SingleStoreImplTest, DumpStackOnFileDeletion_RestoreBranchMatrix_001, T
         std::string storeIdName = std::string("DumpStackRestore") + std::to_string(index++);
         auto store = CreateKVStoreForDumpStack(storeIdName, flags.syncable, flags.backup,
             flags.dumpStackOnFileDeletion);
-        ASSERT_NE(store, nullptr);
-        Status status = store->Restore("not_exist_backup", baseDir);
-        EXPECT_NE(status, SUCCESS);
-        store = nullptr;
+        EXPECT_NE(store, nullptr);
+        if (store != nullptr) {
+            Status status = store->Restore("not_exist_backup", baseDir);
+            EXPECT_EQ(status, INVALID_ARGUMENT);
+            store = nullptr;
+        }
         (void)StoreManager::GetInstance().CloseKVStore(appId, { storeIdName });
         (void)StoreManager::GetInstance().Delete(appId, { storeIdName }, baseDir);
     }

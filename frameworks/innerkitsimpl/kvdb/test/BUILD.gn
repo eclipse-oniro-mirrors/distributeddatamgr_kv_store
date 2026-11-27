@@ -46,6 +46,57 @@ config("module_private_config") {
 }
 
 ###############################################################################
+ohos_source_set("kvdb_hmfs_tag_util_src") {
+  testonly = true
+  sources = [ "../src/hmfs_tag_util.cpp" ]
+  configs = [ ":module_private_config" ]
+  subsystem_name = "distributeddatamgr"
+  part_name = "kv_store"
+}
+
+ohos_source_set("kvdb_mock_single_store_src") {
+  testonly = true
+  sources = [ "../src/single_store_impl.cpp" ]
+  configs = [ ":module_private_config" ]
+  deps = [
+    ":kvdb_hmfs_tag_util_src",
+    "../../../../databaseutils:database_utils",
+    "${kv_store_base_path}/frameworks/libs/distributeddb/:distributeddb",
+    "${kv_store_base_path}/interfaces/innerkits/distributeddatamgr:distributeddata_mgr",
+  ]
+  deps += deps_safwk
+  deps += deps_access_token_libaccesstoken_sdk
+  deps += deps_file_api
+  deps += deps_hilog
+  deps += deps_hitrace_meter
+  deps += deps_hitrace_chain
+  deps += deps_huks
+  deps += deps_ipc_single
+  deps += deps_samgr
+  external_deps = [
+    "bounds_checking_function:libsec_shared",
+    "c_utils:utils",
+  ]
+  external_deps += external_deps_safwk
+  external_deps += external_deps_access_token_libaccesstoken_sdk
+  external_deps += external_deps_file_api
+  external_deps += external_deps_hilog
+  external_deps += external_deps_hitrace_meter
+  external_deps += external_deps_hitrace_chain
+  external_deps += external_deps_huks
+  external_deps += external_deps_ipc_single
+  external_deps += external_deps_samgr
+  if (dm_service_enable) {
+    external_deps += [ "device_manager:devicemanagersdk" ]
+  }
+  if (dms_service_enable && qemu_disable) {
+    external_deps += external_deps_dmsfwk
+  }
+  use_exceptions = true
+  subsystem_name = "distributeddatamgr"
+  part_name = "kv_store"
+}
+
 ohos_source_set("kvdb_src_file") {
   testonly = true
 
@@ -81,7 +132,6 @@ ohos_source_set("kvdb_src_file") {
   kvdb_sources = [
     "../src/backup_manager.cpp",
     "../src/convertor.cpp",
-    "../src/hmfs_tag_util.cpp",
     "../src/kv_types_util.cpp",
     "../src/kvdb_service_client.cpp",
     "../src/observer_bridge.cpp",
@@ -103,6 +153,7 @@ ohos_source_set("kvdb_src_file") {
   configs = [ ":module_private_config" ]
 
   deps = [
+    ":kvdb_hmfs_tag_util_src",
     "../../../../databaseutils:database_utils",
     "../../../../interfaces/innerkits/distributeddatamgr:distributeddata_mgr",
     "//foundation/distributeddatamgr/kv_store/frameworks/libs/distributeddb:distributeddb",
@@ -320,6 +371,28 @@ ohos_unittest("HmfsTagUtilTest") {
   deps += deps_samgr
 }
 
+ohos_unittest("KvDumpStackInnerTest") {
+  module_out_path = module_output_path
+
+  sources = [ "dump_stack_inner_test.cpp" ]
+
+  deps = [
+    "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_inner",
+  ]
+  deps += deps_hilog
+  deps += deps_ipc_single
+  deps += deps_samgr
+
+  external_deps = [
+    "bounds_checking_function:libsec_shared",
+    "c_utils:utils",
+    "googletest:gtest",
+  ]
+  external_deps += external_deps_hilog
+  external_deps += external_deps_ipc_single
+  external_deps += external_deps_samgr
+}
+
 ohos_unittest("BackupManagerTest") {
   module_out_path = module_output_path
 
@@ -534,14 +607,12 @@ ohos_unittest("StoreFactoryMockTest") {
     "../../kvdb/src/kv_hiview_reporter_mock.cpp",
     "../src/backup_manager.cpp",
     "../src/convertor.cpp",
-    "../src/hmfs_tag_util.cpp",
     "../src/dev_manager.cpp",
     "../src/device_convertor.cpp",
     "../src/kv_types_util.cpp",
     "../src/kvdb_service_client.cpp",
     "../src/observer_bridge.cpp",
     "../src/shrink_manager.cpp",
-    "../src/single_store_impl.cpp",
     "../src/store_factory.cpp",
     "../src/store_manager.cpp",
     "../src/store_result_set.cpp",
@@ -560,6 +631,8 @@ ohos_unittest("StoreFactoryMockTest") {
   }
   configs = [ ":module_private_config" ]
   deps = [
+    ":kvdb_hmfs_tag_util_src",
+    ":kvdb_mock_single_store_src",
     "${kv_store_base_path}/frameworks/libs/distributeddb/:distributeddb",
     "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_inner",
     "${kv_store_base_path}/interfaces/innerkits/distributeddatamgr:distributeddata_mgr",
@@ -621,11 +694,9 @@ ohos_unittest("SingleStoreImplMockTest") {
     "../../kvdb/src/kv_hiview_reporter_mock.cpp",
     "../src/backup_manager.cpp",
     "../src/device_convertor.cpp",
-    "../src/hmfs_tag_util.cpp",
     "../src/kv_types_util.cpp",
     "../src/security_manager.cpp",
     "../src/shrink_manager.cpp",
-    "../src/single_store_impl.cpp",
     "../src/store_factory.cpp",
     "../src/store_manager.cpp",
     "../src/store_result_set.cpp",
@@ -658,6 +729,8 @@ ohos_unittest("SingleStoreImplMockTest") {
   configs = [ ":module_private_config" ]
 
   deps = [
+    ":kvdb_hmfs_tag_util_src",
+    ":kvdb_mock_single_store_src",
     "${kv_store_base_path}/frameworks/libs/distributeddb/:distributeddb",
     "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_client_sync",
     "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_inner",
@@ -768,11 +841,9 @@ ohos_unittest("StoreManagerMockTest") {
     "../../kvdb/src/kv_hiview_reporter_mock.cpp",
     "../src/backup_manager.cpp",
     "../src/device_convertor.cpp",
-    "../src/hmfs_tag_util.cpp",
     "../src/kv_types_util.cpp",
     "../src/security_manager.cpp",
     "../src/shrink_manager.cpp",
-    "../src/single_store_impl.cpp",
     "../src/store_factory.cpp",
     "../src/store_manager.cpp",
     "../src/store_result_set.cpp",
@@ -805,6 +876,8 @@ ohos_unittest("StoreManagerMockTest") {
   configs = [ ":module_private_config" ]
 
   deps = [
+    ":kvdb_hmfs_tag_util_src",
+    ":kvdb_mock_single_store_src",
     "${kv_store_base_path}/frameworks/libs/distributeddb/:distributeddb",
     "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_client_sync",
     "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_inner",
@@ -871,6 +944,7 @@ group("unittest") {
     ":SingleStoreImplGetTopTest",
     ":StoreFactoryTest",
     ":KvDumpStackOnFileDeletionTest",
+    ":KvDumpStackInnerTest",
     ":HmfsTagUtilTest",
     ":StoreUtilTest",
   ]

@@ -1232,4 +1232,56 @@ HWTEST_F(SingleKvStoreClientTest, CloudSync002, TestSize.Level1)
     auto status = cloudSyncKvStore->CloudSync(nullptr);
     EXPECT_NE(status, Status::SUCCESS);
 }
+
+/**
+ * @tc.name: DumpStackOptionMatrix001
+ * @tc.desc: Exercise constructor and restore ACL option matrix via DistributedKvDataManager
+ * @tc.type: FUNC
+ * @tc.require:
+ */
+HWTEST_F(SingleKvStoreClientTest, DumpStackOptionMatrix001, TestSize.Level0)
+{
+    struct OptionMatrixCase {
+        bool syncable;
+        bool backup;
+        bool dumpStackOnFileDeletion;
+    };
+    const OptionMatrixCase matrix[] = {
+        { true, false, false },
+        { false, true, false },
+        { false, false, true },
+        { false, false, false },
+    };
+    DistributedKvDataManager manager{};
+    AppId appId = { "odmf" };
+    const std::string baseDir = "/data/service/el1/public/database/odmf";
+    int index = 0;
+    for (const auto &item : matrix) {
+        StoreId storeId = { "dump_stack_client_matrix_" + std::to_string(index++) };
+        Options options;
+        options.createIfMissing = true;
+        options.encrypt = false;
+        options.autoSync = false;
+        options.securityLevel = S1;
+        options.area = EL1;
+        options.kvStoreType = KvStoreType::SINGLE_VERSION;
+        options.role = OWNER;
+        options.baseDir = baseDir;
+        options.syncable = item.syncable;
+        options.backup = item.backup;
+        options.dumpStackOnFileDeletion = item.dumpStackOnFileDeletion;
+        (void)manager.DeleteKvStore(appId, storeId, baseDir);
+        std::shared_ptr<SingleKvStore> kvStore = nullptr;
+        Status openStatus = manager.GetSingleKvStore(options, appId, storeId, kvStore);
+        EXPECT_EQ(openStatus, Status::SUCCESS);
+        EXPECT_NE(kvStore, nullptr);
+        if (kvStore != nullptr) {
+            Status restoreStatus = kvStore->Restore("not_exist_backup", baseDir);
+            EXPECT_EQ(restoreStatus, Status::INVALID_ARGUMENT);
+            kvStore = nullptr;
+        }
+        (void)manager.CloseKvStore(appId, storeId);
+        (void)manager.DeleteKvStore(appId, storeId, baseDir);
+    }
+}
 } // namespace OHOS::Test
