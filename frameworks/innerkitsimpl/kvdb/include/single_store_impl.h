@@ -142,6 +142,7 @@ private:
     void DoNotifyChange();
     void Register();
     void ReportDBFaultEvent(Status status, const std::string &functionName) const;
+    bool NeedSetAcl() const;
     void SetAcl(const std::string &storeId, const std::string &path);
     std::vector<std::string> GenerateDbFiles(const std::string &path);
 

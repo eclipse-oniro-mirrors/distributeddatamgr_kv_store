@@ -20,6 +20,7 @@
 #include <type_traits>
 
 #include "convertor.h"
+#include "include/kv_store_nb_delegate_mock.h"
 #include "include/security_manager_mock.h"
 #include "include/store_util_mock.h"
 #include "single_store_impl.h"
@@ -137,6 +138,26 @@ HWTEST_F(StoreFactoryMockTest, RekeyRecover_001, testing::ext::TestSize.Level1)
     GTEST_LOG_(INFO) << "StoreFactoryMockTest-end RekeyRecover_001";
 }
 
+namespace {
+struct DumpStackFlags {
+    bool syncable;
+    bool backup;
+    bool dumpStackOnFileDeletion;
+};
+
+Options BuildAclOptions(const DumpStackFlags &flags)
+{
+    Options storeOptions = options;
+    storeOptions.createIfMissing = true;
+    storeOptions.autoSync = false;
+    storeOptions.role = OWNER;
+    storeOptions.syncable = flags.syncable;
+    storeOptions.backup = flags.backup;
+    storeOptions.dumpStackOnFileDeletion = flags.dumpStackOnFileDeletion;
+    return storeOptions;
+}
+} // namespace
+
 /**
  * @tc.name: DumpStackOptionMatrix_001
  * @tc.desc: Exercise SingleStoreImpl constructor and restore ACL option matrix
@@ -145,58 +166,23 @@ HWTEST_F(StoreFactoryMockTest, RekeyRecover_001, testing::ext::TestSize.Level1)
  */
 HWTEST_F(StoreFactoryMockTest, DumpStackOptionMatrix_001, testing::ext::TestSize.Level0)
 {
-    struct OptionMatrixCase {
-        bool syncable;
-        bool backup;
-        bool dumpStackOnFileDeletion;
-    };
-    const OptionMatrixCase matrix[] = {
+    const DumpStackFlags matrix[] = {
         { true, false, false },
         { false, true, false },
         { false, false, true },
         { false, false, false },
     };
     EXPECT_CALL(*storeUtilMock, InitPath(_)).WillRepeatedly(Return(false));
-    EXPECT_CALL(*storeUtilMock, GetFiles(_)).WillRepeatedly(Return(std::vector<StoreUtil::FileInfo>{}));
     EXPECT_CALL(*storeUtilMock, Anonymous(An<const std::string &>())).WillRepeatedly(Return(""));
-
-    std::shared_ptr<DBManager> dbManager = std::make_shared<DBManager>(appId.appId, "default");
-    DistributedDB::KvStoreNbDelegate::Option dbOption;
-    dbOption.createIfNecessary = true;
-    dbOption.isMemoryDb = true;
+    auto dbStore = std::make_shared<FakeKvStoreNbDelegate>();
     Convertor convertor;
-    int index = 0;
     for (const auto &item : matrix) {
-        std::string storeName = "factory_dump_stack_" + std::to_string(index++);
-        DistributedDB::DBStatus dbStatus = DistributedDB::DBStatus::DB_ERROR;
-        std::shared_ptr<DistributedDB::KvStoreNbDelegate> dbStore = nullptr;
-        dbManager->GetKvStore(storeName, dbOption, [&dbManager, &dbStatus, &dbStore](auto status, auto *store) {
-            dbStatus = status;
-            if (store != nullptr) {
-                dbStore = std::shared_ptr<DistributedDB::KvStoreNbDelegate>(store,
-                    [dbManager](DistributedDB::KvStoreNbDelegate *ptr) { dbManager->CloseKvStore(ptr); });
-            }
-        });
-        EXPECT_EQ(dbStatus, DistributedDB::DBStatus::OK);
-        EXPECT_NE(dbStore, nullptr);
-        if (dbStore == nullptr) {
-            continue;
-        }
-        Options storeOptions = options;
-        storeOptions.createIfMissing = true;
-        storeOptions.autoSync = false;
-        storeOptions.role = OWNER;
-        storeOptions.syncable = item.syncable;
-        storeOptions.backup = item.backup;
-        storeOptions.dumpStackOnFileDeletion = item.dumpStackOnFileDeletion;
+        Options storeOptions = BuildAclOptions(item);
         auto singleStore = std::make_shared<SingleStoreImpl>(dbStore, appId, storeOptions, convertor);
         EXPECT_NE(singleStore, nullptr);
         if (singleStore != nullptr) {
-            Status restoreStatus = singleStore->Restore("not_exist_backup", storeOptions.baseDir);
-            EXPECT_EQ(restoreStatus, INVALID_ARGUMENT);
-            singleStore = nullptr;
+            EXPECT_EQ(singleStore->Restore("not_exist_backup", storeOptions.baseDir), INVALID_ARGUMENT);
         }
-        dbStore = nullptr;
     }
 }
 } // namespace OHOS::DistributedKv

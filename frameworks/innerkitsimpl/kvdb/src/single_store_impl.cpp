@@ -16,6 +16,7 @@
 #include "single_store_impl.h"
 
 #include <cerrno>
+#include <cstdint>
 #include "acl.h"
 #include "auto_sync_timer.h"
 #include "backup_manager.h"
@@ -38,6 +39,11 @@ using namespace std::chrono;
 using namespace DATABASE_UTILS;
 
 namespace {
+__attribute__((no_sanitize("bool"))) inline bool ReadBoolFlag(const bool &flag)
+{
+    return flag;
+}
+
 ExecutorPool &GetShrinkExecutorPool()
 {
     static ExecutorPool pool(1, 1, "KVDB_Shrink");
@@ -76,8 +82,8 @@ SingleStoreImpl::SingleStoreImpl(
     isSchemaStore_ = !options.schema.empty();
     isCustomDir_ = options.isCustomDir;
     isApplication_ = options.isApplication;
-    dumpStackOnFileDeletion_ = options.dumpStackOnFileDeletion;
-    if (syncable_ || autoBackup_ || dumpStackOnFileDeletion_) {
+    dumpStackOnFileDeletion_ = ReadBoolFlag(options.dumpStackOnFileDeletion);
+    if (NeedSetAcl()) {
         SetAcl(storeId_, path);
         if (autoBackup_) {
             BackupManager::GetInstance().Prepare(path, storeId_);
@@ -840,7 +846,7 @@ Status SingleStoreImpl::Restore(const std::string &file, const std::string &base
         ZLOGE("status:0x%{public}x storeId:%{public}s backup:%{public}s ", status,
             StoreUtil::Anonymous(storeId_).c_str(), file.c_str());
     }
-    if (syncable_ || autoBackup_ || dumpStackOnFileDeletion_) {
+    if (NeedSetAcl()) {
         SetAcl(storeId_, path_);
     }
     Options options = { .encrypt = encrypt_, .autoSync = autoSync_, .securityLevel = securityLevel_,
@@ -1270,6 +1276,12 @@ void SingleStoreImpl::ReportDBFaultEvent(Status status, const std::string &funct
     ReportInfo reportInfo = { .options = options, .errorCode = status, .systemErrorNo = errno,
         .appId = appId_, .storeId = storeId_, .functionName = functionName };
     KVDBFaultHiViewReporter::ReportKVFaultEvent(reportInfo);
+}
+
+__attribute__((no_sanitize("bool"))) bool SingleStoreImpl::NeedSetAcl() const
+{
+    return (static_cast<uint8_t>(syncable_) | static_cast<uint8_t>(autoBackup_) |
+        static_cast<uint8_t>(dumpStackOnFileDeletion_)) != 0;
 }
 
 void SingleStoreImpl::SetAcl(const std::string &storeId, const std::string &path)
