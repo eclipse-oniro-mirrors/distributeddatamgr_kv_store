@@ -96,6 +96,7 @@ std::shared_ptr<SingleKvStore> StoreFactory::GetOrOpenStore(const AppId &appId, 
             return !stores.empty();
         }
         std::string path = options.GetDatabaseDir();
+        StoreUtil::ClearDbFileTags(path, storeId.storeId);
         auto dbManager = GetDBManager(path, appId, options.subUser, options.role);
         if (dbManager == nullptr) {
             status = INVALID_ARGUMENT;
@@ -152,6 +153,7 @@ std::shared_ptr<SingleKvStore> StoreFactory::GetOrOpenStore(const AppId &appId, 
 
 Status StoreFactory::Delete(const AppId &appId, const StoreId &storeId, const std::string &path, int32_t subUser)
 {
+    StoreUtil::ClearDbFileTags(path, storeId.storeId);
     Close(appId, storeId, subUser, true);
     auto dbManager = GetDBManager(path, appId, subUser);
     if (dbManager == nullptr) {

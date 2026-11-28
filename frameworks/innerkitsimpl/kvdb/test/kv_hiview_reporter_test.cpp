@@ -20,6 +20,7 @@
 #include "include/hisysevent_mock.h"
 #include "kv_hiview_reporter.h"
 #include "log_print.h"
+#include "store_util.h"
 #include "types.h"
 #include <unistd.h>
 namespace OHOS::Test {
@@ -191,7 +192,7 @@ HWTEST_F(KvHiviewReporterTest, StoreCorruptedAndRebuildTest001, TestSize.Level1)
     reportInfo.functionName = std::string(__FUNCTION__);
     KVDBFaultHiViewReporter::ReportKVFaultEvent(reportInfo);
     KVDBFaultHiViewReporter::ReportKVFaultEvent(reportInfo);
-    std::string dbPath = KVDBFaultHiViewReporter::GetDBPath(encryptOptions.GetDatabaseDir(), encryptStoreId.storeId);
+    std::string dbPath = StoreUtil::GetDBPath(encryptOptions.GetDatabaseDir(), encryptStoreId.storeId);
     std::string flagFilename = dbPath + std::string(ENCRYPT_STOREID) + std::string(DB_CORRUPTED_POSTFIX);
     auto ret = access(flagFilename.c_str(), F_OK);
     ASSERT_EQ(ret, 0);
@@ -221,8 +222,7 @@ HWTEST_F(KvHiviewReporterTest, StoreCorruptedAndRebuildTest002, TestSize.Level1)
     EXPECT_CALL(*mock_, HiSysEvent_Write(_, _, _, _, _, _, _)).Times(2);
     KVDBFaultHiViewReporter::ReportKVFaultEvent(reportInfo);
     KVDBFaultHiViewReporter::ReportKVFaultEvent(reportInfo);
-    std::string dbPath = KVDBFaultHiViewReporter::GetDBPath(unencryptOptions.GetDatabaseDir(),
-        unencryptStoreId.storeId);
+    std::string dbPath = StoreUtil::GetDBPath(unencryptOptions.GetDatabaseDir(), unencryptStoreId.storeId);
     std::string flagFilename = dbPath + std::string(UNENCRYPT_STOREID) + std::string(DB_CORRUPTED_POSTFIX);
     auto ret = access(flagFilename.c_str(), F_OK);
     ASSERT_EQ(ret, 0);

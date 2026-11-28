@@ -46,6 +46,22 @@ config("module_private_config") {
 }
 
 ###############################################################################
+ohos_source_set("kvdb_hmfs_tag_util_src") {
+  testonly = true
+
+  sanitize = {
+    boundary_sanitize = true
+    cfi = true
+    cfi_cross_dso = true
+    debug = false
+  }
+
+  sources = [ "../src/kv_hmfs_tag_util.cpp" ]
+  configs = [ ":module_private_config" ]
+  subsystem_name = "distributeddatamgr"
+  part_name = "kv_store"
+}
+
 ohos_source_set("kvdb_src_file") {
   testonly = true
 
@@ -102,6 +118,7 @@ ohos_source_set("kvdb_src_file") {
   configs = [ ":module_private_config" ]
 
   deps = [
+    ":kvdb_hmfs_tag_util_src",
     "../../../../databaseutils:database_utils",
     "../../../../interfaces/innerkits/distributeddatamgr:distributeddata_mgr",
     "//foundation/distributeddatamgr/kv_store/frameworks/libs/distributeddb:distributeddb",
@@ -245,6 +262,100 @@ ohos_unittest("StoreUtilTest") {
   deps += deps_hilog
   deps += deps_ipc_single
   deps += deps_samgr
+}
+
+ohos_unittest("KvDumpStackOnFileDeletionTest") {
+  module_out_path = module_output_path
+
+  sources = [
+    "../../kvdb/src/kv_hiview_reporter_mock.cpp",
+    "dump_stack_on_file_deletion_test.cpp",
+  ]
+
+  configs = [ ":module_private_config" ]
+
+  external_deps = [
+    "bounds_checking_function:libsec_shared",
+    "c_utils:utils",
+    "googletest:gtest",
+  ]
+  external_deps += external_deps_safwk
+  external_deps += external_deps_hilog
+  external_deps += external_deps_ipc_single
+  external_deps += external_deps_samgr
+
+  ldflags = [ "-Wl,--wrap=ioctl" ]
+
+  cflags = [
+    "-fno-access-control",
+  ]
+
+  deps = [
+    ":kvdb_src_file",
+    "//foundation/distributeddatamgr/kv_store/frameworks/libs/distributeddb/:distributeddb",
+  ]
+  deps += deps_safwk
+  deps += deps_hilog
+  deps += deps_ipc_single
+  deps += deps_samgr
+}
+
+ohos_unittest("HmfsTagUtilTest") {
+  module_out_path = module_output_path
+
+  sources = [
+    "../../kvdb/src/kv_hiview_reporter_mock.cpp",
+    "hmfs_tag_util_test.cpp",
+  ]
+
+  configs = [ ":module_private_config" ]
+
+  external_deps = [
+    "bounds_checking_function:libsec_shared",
+    "c_utils:utils",
+    "googletest:gtest",
+  ]
+  external_deps += external_deps_safwk
+  external_deps += external_deps_hilog
+  external_deps += external_deps_ipc_single
+  external_deps += external_deps_samgr
+
+  ldflags = [ "-Wl,--wrap=ioctl" ]
+
+  cflags = [
+    "-fno-access-control",
+  ]
+
+  deps = [
+    ":kvdb_src_file",
+    "//foundation/distributeddatamgr/kv_store/frameworks/libs/distributeddb/:distributeddb",
+  ]
+  deps += deps_safwk
+  deps += deps_hilog
+  deps += deps_ipc_single
+  deps += deps_samgr
+}
+
+ohos_unittest("KvDumpStackInnerTest") {
+  module_out_path = module_output_path
+
+  sources = [ "dump_stack_inner_test.cpp" ]
+
+  deps = [
+    "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_inner",
+  ]
+  deps += deps_hilog
+  deps += deps_ipc_single
+  deps += deps_samgr
+
+  external_deps = [
+    "bounds_checking_function:libsec_shared",
+    "c_utils:utils",
+    "googletest:gtest",
+  ]
+  external_deps += external_deps_hilog
+  external_deps += external_deps_ipc_single
+  external_deps += external_deps_samgr
 }
 
 ohos_unittest("BackupManagerTest") {
@@ -583,6 +694,7 @@ ohos_unittest("SingleStoreImplMockTest") {
   configs = [ ":module_private_config" ]
 
   deps = [
+    ":kvdb_hmfs_tag_util_src",
     "${kv_store_base_path}/frameworks/libs/distributeddb/:distributeddb",
     "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_client_sync",
     "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_inner",
@@ -729,6 +841,7 @@ ohos_unittest("StoreManagerMockTest") {
   configs = [ ":module_private_config" ]
 
   deps = [
+    ":kvdb_hmfs_tag_util_src",
     "${kv_store_base_path}/frameworks/libs/distributeddb/:distributeddb",
     "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_client_sync",
     "${kv_store_base_path}/interfaces/innerkits/distributeddata:distributeddata_inner",
@@ -794,6 +907,9 @@ group("unittest") {
     ":BackupManagerTest",
     ":SingleStoreImplGetTopTest",
     ":StoreFactoryTest",
+    ":KvDumpStackOnFileDeletionTest",
+    ":KvDumpStackInnerTest",
+    ":HmfsTagUtilTest",
     ":StoreUtilTest",
   ]
 

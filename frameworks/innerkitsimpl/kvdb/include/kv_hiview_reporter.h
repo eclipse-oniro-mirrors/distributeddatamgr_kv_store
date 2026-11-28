@@ -88,8 +88,6 @@ private:
 
     static void CreateCorruptedFlag(const std::string &dbPath, const std::string &storeId);
 
-    static std::string GetDBPath(const std::string& path, const std::string& storeId);
-
     static void DeleteCorruptedFlag(const std::string& dbPath, const std::string& storeId);
 
     static std::string GetFileStatInfo(const std::string &dbPath);

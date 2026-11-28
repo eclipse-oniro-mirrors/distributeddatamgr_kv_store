@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "kv_hmfs_tag_util.h"
 #include "log_print.h"
 #include "types.h"
 #include "acl.h"
@@ -31,6 +32,8 @@ constexpr int32_t MIN_SIZE = HEAD_SIZE + END_SIZE + 3;
 constexpr int32_t SERVICE_GID = 3012;
 constexpr const char *REPLACE_CHAIN = "***";
 constexpr const char *DEFAULT_ANONYMOUS = "******";
+constexpr const char *DB_FILE_PATH = "main/gen_natural_store.db";
+constexpr const char *META_DB_PATH = "meta/meta.db";
 std::atomic<uint64_t> StoreUtil::sequenceId_ = 0;
 using DBStatus = DistributedDB::DBStatus;
 std::map<DBStatus, Status> StoreUtil::statusMap_ = {
@@ -233,6 +236,25 @@ std::vector<StoreUtil::FileInfo> StoreUtil::GetFiles(const std::string &path)
     }
     closedir(dirp);
     return fileInfos;
+}
+
+std::string StoreUtil::GetDBPath(const std::string &baseDir, const std::string &storeId)
+{
+    std::string storeDir;
+    (void)DistributedDB::KvStoreDelegateManager::GetDatabaseDir(storeId, storeDir);
+    return baseDir + "/kvdb/" + storeDir + "/";
+}
+
+std::string StoreUtil::GetStoreDir(const std::string &baseDir, const std::string &storeId)
+{
+    return GetDBPath(baseDir, storeId) + "single_ver/";
+}
+
+void StoreUtil::ClearDbFileTags(const std::string &baseDir, const std::string &storeId)
+{
+    std::string storeDir = GetStoreDir(baseDir, storeId);
+    KvHmfsTagUtil::ClearDbFileTags(storeDir + DB_FILE_PATH);
+    KvHmfsTagUtil::ClearDbFileTags(storeDir + META_DB_PATH);
 }
 
 bool StoreUtil::Rename(const std::string &oldName, const std::string &newName)

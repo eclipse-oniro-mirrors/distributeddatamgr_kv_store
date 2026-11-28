@@ -55,9 +55,4 @@ void KVDBFaultHiViewReporter::DeleteCorruptedFlag(const std::string &dbPath, con
 {
     return;
 }
-
-std::string KVDBFaultHiViewReporter::GetDBPath(const std::string &path, const std::string &storeId)
-{
-    return "";
-}
 } // namespace OHOS::DistributedKv

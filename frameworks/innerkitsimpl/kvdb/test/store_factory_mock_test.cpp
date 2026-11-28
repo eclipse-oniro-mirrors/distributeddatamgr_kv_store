@@ -16,10 +16,14 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <memory>
+#include <string>
 #include <type_traits>
 
+#include "convertor.h"
+#include "include/kv_store_nb_delegate_mock.h"
 #include "include/security_manager_mock.h"
 #include "include/store_util_mock.h"
+#include "single_store_impl.h"
 #include "store_factory.h"
 
 namespace OHOS::DistributedKv {
@@ -132,5 +136,53 @@ HWTEST_F(StoreFactoryMockTest, RekeyRecover_001, testing::ext::TestSize.Level1)
         GTEST_LOG_(INFO) << "StoreFactoryMockTest-an exception occurred by GetSrcPath.";
     }
     GTEST_LOG_(INFO) << "StoreFactoryMockTest-end RekeyRecover_001";
+}
+
+namespace {
+struct DumpStackFlags {
+    bool syncable;
+    bool backup;
+    bool dumpStackOnFileDeletion;
+};
+
+Options BuildAclOptions(const DumpStackFlags &flags)
+{
+    Options storeOptions = options;
+    storeOptions.createIfMissing = true;
+    storeOptions.autoSync = false;
+    storeOptions.role = OWNER;
+    storeOptions.syncable = flags.syncable;
+    storeOptions.backup = flags.backup;
+    storeOptions.dumpStackOnFileDeletion = flags.dumpStackOnFileDeletion;
+    return storeOptions;
+}
+} // namespace
+
+/**
+ * @tc.name: DumpStackOptionMatrix_001
+ * @tc.desc: Exercise SingleStoreImpl constructor and restore ACL option matrix
+ * @tc.type: FUNC
+ * @tc.require:
+ */
+HWTEST_F(StoreFactoryMockTest, DumpStackOptionMatrix_001, testing::ext::TestSize.Level0)
+{
+    const DumpStackFlags matrix[] = {
+        { true, false, false },
+        { false, true, false },
+        { false, false, true },
+        { false, false, false },
+    };
+    EXPECT_CALL(*storeUtilMock, InitPath(_)).WillRepeatedly(Return(false));
+    EXPECT_CALL(*storeUtilMock, Anonymous(An<const std::string &>())).WillRepeatedly(Return(""));
+    auto dbStore = std::make_shared<FakeKvStoreNbDelegate>();
+    Convertor convertor;
+    for (const auto &item : matrix) {
+        Options storeOptions = BuildAclOptions(item);
+        auto singleStore = std::make_shared<SingleStoreImpl>(dbStore, appId, storeOptions, convertor);
+        EXPECT_NE(singleStore, nullptr);
+        if (singleStore != nullptr) {
+            EXPECT_EQ(singleStore->Restore("not_exist_backup", storeOptions.baseDir), INVALID_ARGUMENT);
+        }
+    }
 }
 } // namespace OHOS::DistributedKv

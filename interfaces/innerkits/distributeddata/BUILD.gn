@@ -87,6 +87,7 @@ if (data_share_enabled) {
 kvdb_source_config = [
   "../../../frameworks/innerkitsimpl/kvdb/src/backup_manager.cpp",
   "../../../frameworks/innerkitsimpl/kvdb/src/convertor.cpp",
+  "../../../frameworks/innerkitsimpl/kvdb/src/kv_hmfs_tag_util.cpp",
   "../../../frameworks/innerkitsimpl/kvdb/src/kv_types_util.cpp",
   "../../../frameworks/innerkitsimpl/kvdb/src/kvdb_service_client.cpp",
   "../../../frameworks/innerkitsimpl/kvdb/src/observer_bridge.cpp",
@@ -199,6 +200,7 @@ ohos_shared_library("distributeddata_client_sync") {
     debug = false
   }
   sources = [
+    "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/kv_hmfs_tag_util.cpp",
     "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/process_communication_impl.cpp",
     "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/process_system_api_adapter_impl.cpp",
     "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/store_util.cpp",
@@ -259,8 +261,15 @@ ohos_static_library("kvdb_inner_lite") {
   sources = [
     "${kv_store_base_path}/frameworks/innerkitsimpl/distributeddatafwk/src/blob.cpp",
     "${kv_store_base_path}/frameworks/innerkitsimpl/distributeddatafwk/src/change_notification.cpp",
+    "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/kv_hmfs_tag_util.cpp",
     "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/kv_types_util.cpp",
   ]
+
+  if (is_linux) {
+    cflags_cc = [ "-includefdsan_mock.h" ]
+    include_dirs = [ "${kv_store_base_path}/kvstoremock/frameworks/native/kv/fdsan" ]
+    sources += [ "${kv_store_base_path}/kvstoremock/frameworks/native/kv/fdsan/fdsan_mock.cpp" ]
+  }
 
   deps = []
   deps += deps_hilog

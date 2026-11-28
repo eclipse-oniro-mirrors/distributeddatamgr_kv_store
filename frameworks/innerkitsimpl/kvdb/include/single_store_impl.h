@@ -142,6 +142,7 @@ private:
     void DoNotifyChange();
     void Register();
     void ReportDBFaultEvent(Status status, const std::string &functionName) const;
+    bool NeedSetAcl() const;
     void SetAcl(const std::string &storeId, const std::string &path);
     std::vector<std::string> GenerateDbFiles(const std::string &path);
 
@@ -165,6 +166,7 @@ private:
     bool encrypt_ = false;
     bool autoBackup_ = false;
     bool isCustomDir_ = false;
+    bool dumpStackOnFileDeletion_ = false;
     int32_t securityLevel_ = -1;
     int32_t area_ = 1;
     std::string hapName_ = "";

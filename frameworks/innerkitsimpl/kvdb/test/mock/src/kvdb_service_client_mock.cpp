@@ -56,6 +56,7 @@ Status KVDBServiceClient::BeforeCreate(const AppId &appId, const StoreId &storeI
 Status KVDBServiceClient::AfterCreate(
     const AppId &appId, const StoreId &storeId, const Options &options, const std::vector<uint8_t> &password)
 {
+    KVDBServiceClientMock::afterCreateDumpStackOnFileDeletion = options.dumpStackOnFileDeletion;
     return KVDBServiceClientMock::status;
 }
 

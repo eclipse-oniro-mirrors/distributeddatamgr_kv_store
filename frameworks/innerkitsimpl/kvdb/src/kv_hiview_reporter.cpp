@@ -70,7 +70,7 @@ void KVDBFaultHiViewReporter::ReportKVFaultEvent(const ReportInfo &reportInfo)
     eventInfo.functionName = reportInfo.functionName;
     eventInfo.systemErrorNo = reportInfo.systemErrorNo;
     eventInfo.errorOccurTime = GetCurrentMicrosecondTimeFormat();
-    eventInfo.dbPath = GetDBPath(reportInfo.options.GetDatabaseDir(), reportInfo.storeId);
+    eventInfo.dbPath = StoreUtil::GetDBPath(reportInfo.options.GetDatabaseDir(), reportInfo.storeId);
     if (eventInfo.encryptStatus) {
         eventInfo.keyPath = reportInfo.options.GetDatabaseDir() + "/key/" + reportInfo.storeId + SUFFIX_KEY;
     } else {
@@ -86,7 +86,7 @@ void KVDBFaultHiViewReporter::ReportKVFaultEvent(const ReportInfo &reportInfo)
 
 void KVDBFaultHiViewReporter::ReportKVRebuildEvent(const ReportInfo &reportInfo)
 {
-    auto dbPath = GetDBPath(reportInfo.options.GetDatabaseDir(), reportInfo.storeId);
+    auto dbPath = StoreUtil::GetDBPath(reportInfo.options.GetDatabaseDir(), reportInfo.storeId);
     if (!IsReportedCorruptedFault(reportInfo.appId, reportInfo.storeId, dbPath)) {
         return;
     }
@@ -277,14 +277,6 @@ void KVDBFaultHiViewReporter::DeleteCorruptedFlag(const std::string &dbPath, con
         ZLOGW("Remove corrupted flg fail, flgname=%{public}s, errno=%{public}d",
             StoreUtil::Anonymous(flagFilename).c_str(), errno);
     }
-}
-
-std::string KVDBFaultHiViewReporter::GetDBPath(const std::string &path, const std::string &storeId)
-{
-    std::string reporterDir = "";
-    DistributedDB::KvStoreDelegateManager::GetDatabaseDir(storeId, reporterDir);
-    reporterDir = path + "/kvdb/" + reporterDir + "/";
-    return reporterDir;
 }
 
 std::string KVDBFaultHiViewReporter::GetFileStatInfo(const std::string &filePath)

@@ -36,6 +36,7 @@ public:
     MOCK_METHOD(std::shared_ptr<KVDBServiceClient>, GetInstance, ());
     MOCK_METHOD(sptr<KVDBNotifierClient>, GetServiceAgent, (const AppId &));
     static inline Status status = ERROR;
+    static inline bool afterCreateDumpStackOnFileDeletion = false;
 };
 } // namespace OHOS::DistributedKv
 #endif // OHOS_DISTRIBUTED_DATA_KVDB_SERVICE_CLIENT_MOCK_H

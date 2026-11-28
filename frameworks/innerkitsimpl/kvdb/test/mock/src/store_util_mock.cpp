@@ -148,4 +148,23 @@ bool StoreUtil::SetDatabaseGid(const std::string &path)
 {
     return true;
 }
+
+bool StoreUtil::SetServiceGid(const std::string &)
+{
+    return true;
+}
+
+std::string StoreUtil::GetDBPath(const std::string &, const std::string &)
+{
+    return "";
+}
+
+std::string StoreUtil::GetStoreDir(const std::string &, const std::string &)
+{
+    return "";
+}
+
+void StoreUtil::ClearDbFileTags(const std::string &, const std::string &)
+{
+}
 } // namespace OHOS::DistributedKv
