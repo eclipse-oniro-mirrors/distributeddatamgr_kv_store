@@ -29,10 +29,6 @@ void KVDBFaultHiViewReporter::ReportKVRebuildEvent(const ReportInfo &reportInfo)
     return;
 }
 
-void KVDBFaultHiViewReporter::ClearDbFileTags(const std::string &, const std::string &)
-{
-}
-
 std::string KVDBFaultHiViewReporter::GetCurrentMicrosecondTimeFormat()
 {
     return "";
@@ -58,10 +54,5 @@ void KVDBFaultHiViewReporter::CreateCorruptedFlag(const std::string &dbPath, con
 void KVDBFaultHiViewReporter::DeleteCorruptedFlag(const std::string &dbPath, const std::string &storeId)
 {
     return;
-}
-
-std::string KVDBFaultHiViewReporter::GetDBPath(const std::string &path, const std::string &storeId)
-{
-    return "";
 }
 } // namespace OHOS::DistributedKv

@@ -47,6 +47,7 @@ public:
     static std::vector<FileInfo> GetFiles(const std::string &path);
     static std::string GetDBPath(const std::string &baseDir, const std::string &storeId);
     static std::string GetStoreDir(const std::string &baseDir, const std::string &storeId);
+    static void ClearDbFileTags(const std::string &baseDir, const std::string &storeId);
     static bool Rename(const std::string &oldName, const std::string &newName);
     static bool IsFileExist(const std::string &name);
     static bool Remove(const std::string &path);

@@ -74,8 +74,6 @@ public:
     static void ReportKVFaultEvent(const ReportInfo &reportInfo);
 
     static void ReportKVRebuildEvent(const ReportInfo &reportInfo);
-
-    static void ClearDbFileTags(const std::string &path, const std::string &storeId);
 private:
     static void ReportFaultEvent(KVDBFaultEvent eventInfo);
 
@@ -89,8 +87,6 @@ private:
         const std::string &dbPath);
 
     static void CreateCorruptedFlag(const std::string &dbPath, const std::string &storeId);
-
-    static std::string GetDBPath(const std::string& path, const std::string& storeId);
 
     static void DeleteCorruptedFlag(const std::string& dbPath, const std::string& storeId);
 

@@ -163,4 +163,8 @@ std::string StoreUtil::GetStoreDir(const std::string &, const std::string &)
 {
     return "";
 }
+
+void StoreUtil::ClearDbFileTags(const std::string &, const std::string &)
+{
+}
 } // namespace OHOS::DistributedKv

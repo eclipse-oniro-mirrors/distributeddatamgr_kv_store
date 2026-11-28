@@ -200,6 +200,7 @@ ohos_shared_library("distributeddata_client_sync") {
     debug = false
   }
   sources = [
+    "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/kv_hmfs_tag_util.cpp",
     "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/process_communication_impl.cpp",
     "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/process_system_api_adapter_impl.cpp",
     "${kv_store_base_path}/frameworks/innerkitsimpl/kvdb/src/store_util.cpp",

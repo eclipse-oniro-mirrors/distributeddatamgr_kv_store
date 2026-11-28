@@ -829,7 +829,7 @@ Status SingleStoreImpl::Restore(const std::string &file, const std::string &base
     if (service != nullptr) {
         service->Close({ appId_ }, { storeId_ }, subUser_);
     }
-    KVDBFaultHiViewReporter::ClearDbFileTags(path_, storeId_);
+    StoreUtil::ClearDbFileTags(path_, storeId_);
     BackupInfo info = { .name = file, .baseDir = baseDir, .appId = appId_, .storeId = storeId_,
         .encrypt = encrypt_, .isCheckIntegrity = isApplication_, .subUser = subUser_, .isCustomDir = isCustomDir_ };
     auto status = BackupManager::GetInstance().Restore(info, dbStore_);
