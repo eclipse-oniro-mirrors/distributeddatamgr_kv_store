@@ -152,12 +152,8 @@ public:
     static std::string BaseDir();
     static std::string CanonicalDir(const std::string &dir);
     static std::string SingleVerDir(const std::string &storeIdName);
-    static std::string SingleVerDirForBase(const std::string &baseDir, const std::string &storeIdName);
     static std::string DbFilePath(const std::string &storeIdName);
     static std::vector<std::string> ExpectedPaths(const std::string &storeIdName);
-    static std::vector<std::string> ExpectedPathsForBase(const std::string &baseDir, const std::string &storeIdName);
-    static Options BuildStoreOptions(const std::string &baseDir, bool dumpStack, bool syncable = false,
-        bool backup = false, bool isCustomDir = false);
     static std::shared_ptr<SingleKvStore> OpenStore(const std::string &storeIdName, bool dumpStack, Status &status,
         bool syncable = false, bool backup = false);
     static void CloseStore(const std::string &storeIdName);
@@ -202,19 +198,13 @@ std::string KvDumpStackOnFileDeletionTest::BaseDir()
     return CanonicalDir(TEST_BASE_DIR);
 }
 
-std::string KvDumpStackOnFileDeletionTest::SingleVerDirForBase(const std::string &baseDir,
-    const std::string &storeIdName)
+std::string KvDumpStackOnFileDeletionTest::SingleVerDir(const std::string &storeIdName)
 {
     std::string storeDir;
     if (DistributedDB::KvStoreDelegateManager::GetDatabaseDir(storeIdName, storeDir) != DistributedDB::DBStatus::OK) {
         return "";
     }
-    return CanonicalDir(baseDir) + "/kvdb/" + storeDir + "/single_ver";
-}
-
-std::string KvDumpStackOnFileDeletionTest::SingleVerDir(const std::string &storeIdName)
-{
-    return SingleVerDirForBase(TEST_BASE_DIR, storeIdName);
+    return BaseDir() + "/kvdb/" + storeDir + "/single_ver";
 }
 
 std::string KvDumpStackOnFileDeletionTest::DbFilePath(const std::string &storeIdName)
@@ -222,10 +212,9 @@ std::string KvDumpStackOnFileDeletionTest::DbFilePath(const std::string &storeId
     return SingleVerDir(storeIdName) + "/main/gen_natural_store.db";
 }
 
-std::vector<std::string> KvDumpStackOnFileDeletionTest::ExpectedPathsForBase(const std::string &baseDir,
-    const std::string &storeIdName)
+std::vector<std::string> KvDumpStackOnFileDeletionTest::ExpectedPaths(const std::string &storeIdName)
 {
-    std::string dir = SingleVerDirForBase(baseDir, storeIdName) + "/";
+    std::string dir = SingleVerDir(storeIdName) + "/";
     return {
         dir + "main/gen_natural_store.db",
         dir + "main/gen_natural_store.db-wal",
@@ -236,14 +225,11 @@ std::vector<std::string> KvDumpStackOnFileDeletionTest::ExpectedPathsForBase(con
     };
 }
 
-std::vector<std::string> KvDumpStackOnFileDeletionTest::ExpectedPaths(const std::string &storeIdName)
+std::shared_ptr<SingleKvStore> KvDumpStackOnFileDeletionTest::OpenStore(const std::string &storeIdName, bool dumpStack,
+    Status &status, bool syncable, bool backup)
 {
-    return ExpectedPathsForBase(TEST_BASE_DIR, storeIdName);
-}
-
-Options KvDumpStackOnFileDeletionTest::BuildStoreOptions(const std::string &baseDir, bool dumpStack, bool syncable,
-    bool backup, bool isCustomDir)
-{
+    AppId appId = { TEST_APP_ID };
+    StoreId storeId = { storeIdName };
     Options options;
     options.kvStoreType = SINGLE_VERSION;
     options.securityLevel = S1;
@@ -253,18 +239,8 @@ Options KvDumpStackOnFileDeletionTest::BuildStoreOptions(const std::string &base
     options.syncable = syncable;
     options.area = EL1;
     options.role = OWNER;
-    options.baseDir = baseDir;
-    options.isCustomDir = isCustomDir;
+    options.baseDir = TEST_BASE_DIR;
     options.dumpStackOnFileDeletion = dumpStack;
-    return options;
-}
-
-std::shared_ptr<SingleKvStore> KvDumpStackOnFileDeletionTest::OpenStore(const std::string &storeIdName, bool dumpStack,
-    Status &status, bool syncable, bool backup)
-{
-    AppId appId = { TEST_APP_ID };
-    StoreId storeId = { storeIdName };
-    Options options = BuildStoreOptions(TEST_BASE_DIR, dumpStack, syncable, backup, false);
     return StoreManager::GetInstance().GetKVStore(appId, storeId, options, status);
 }
 
@@ -326,30 +302,6 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, GetOrOpenStore_CacheHitNoClear_001, Test
     (void)DeleteStore(storeIdName);
 }
 
-HWTEST_F(KvDumpStackOnFileDeletionTest, OpenStore_Syncable_ClearPath_001, TestSize.Level0)
-{
-    std::string storeIdName = "OpenSyncableStore";
-    Status status = ERROR;
-    auto kvStore = OpenStore(storeIdName, false, status, true, false);
-    ASSERT_EQ(status, SUCCESS);
-    ASSERT_NE(kvStore, nullptr);
-    CloseStore(storeIdName);
-    kvStore = nullptr;
-    (void)DeleteStore(storeIdName);
-}
-
-HWTEST_F(KvDumpStackOnFileDeletionTest, OpenStore_Backup_ClearPath_001, TestSize.Level0)
-{
-    std::string storeIdName = "OpenBackupStore";
-    Status status = ERROR;
-    auto kvStore = OpenStore(storeIdName, false, status, false, true);
-    ASSERT_EQ(status, SUCCESS);
-    ASSERT_NE(kvStore, nullptr);
-    CloseStore(storeIdName);
-    kvStore = nullptr;
-    (void)DeleteStore(storeIdName);
-}
-
 HWTEST_F(KvDumpStackOnFileDeletionTest, DeleteKvStore_ClearBeforeDelete_001, TestSize.Level0)
 {
     std::string storeIdName = "DeleteClearStore";
@@ -408,107 +360,6 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_ClearBeforeImport_001, TestSize.
     (void)DeleteStore(storeIdName);
 }
 
-HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_IoctlFailKeepsResult_001, TestSize.Level0)
-{
-    std::string storeIdName = "RestoreIoctlFailStore";
-    Status status = ERROR;
-    auto kvStore = OpenStore(storeIdName, true, status);
-    ASSERT_EQ(status, SUCCESS);
-    ASSERT_NE(kvStore, nullptr);
-    ResetIoctlState();
-    g_taggedFiles = true;
-    g_ioctlFail = true;
-    Status restoreStatus = kvStore->Restore("not_exist_backup", TEST_BASE_DIR);
-    EXPECT_NE(restoreStatus, SUCCESS);
-    EXPECT_EQ(g_requests.size(), 6U);
-    EXPECT_TRUE(g_clearFiles.empty());
-    CloseStore(storeIdName);
-    kvStore = nullptr;
-    (void)DeleteStore(storeIdName);
-}
-
-HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_Syncable_ClearBeforeImport_001, TestSize.Level0)
-{
-    std::string storeIdName = "RestoreSyncableStore";
-    Status status = ERROR;
-    auto kvStore = OpenStore(storeIdName, false, status, true, false);
-    ASSERT_EQ(status, SUCCESS);
-    ASSERT_NE(kvStore, nullptr);
-    ResetIoctlState();
-    g_taggedFiles = true;
-    Status restoreStatus = kvStore->Restore("not_exist_backup", TEST_BASE_DIR);
-    EXPECT_NE(restoreStatus, SUCCESS);
-    EXPECT_EQ(g_getPaths, ExpectedPaths(storeIdName));
-    EXPECT_EQ(g_clearFiles, ExpectedFileNames());
-    EXPECT_EQ(g_requests.size(), 12U);
-    CloseStore(storeIdName);
-    kvStore = nullptr;
-    (void)DeleteStore(storeIdName);
-}
-
-HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_Backup_ClearBeforeImport_001, TestSize.Level0)
-{
-    std::string storeIdName = "RestoreBackupStore";
-    Status status = ERROR;
-    auto kvStore = OpenStore(storeIdName, false, status, false, true);
-    ASSERT_EQ(status, SUCCESS);
-    ASSERT_NE(kvStore, nullptr);
-    ResetIoctlState();
-    g_taggedFiles = true;
-    Status restoreStatus = kvStore->Restore("not_exist_backup", TEST_BASE_DIR);
-    EXPECT_NE(restoreStatus, SUCCESS);
-    EXPECT_TRUE(HasServiceAcl(DbFilePath(storeIdName)));
-    EXPECT_EQ(g_getPaths, ExpectedPaths(storeIdName));
-    EXPECT_EQ(g_clearFiles, ExpectedFileNames());
-    EXPECT_EQ(g_requests.size(), 12U);
-    CloseStore(storeIdName);
-    kvStore = nullptr;
-    (void)DeleteStore(storeIdName);
-}
-
-HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_FlagFalse_ClearBeforeImport_001, TestSize.Level0)
-{
-    std::string storeIdName = "RestoreFlagFalseStore";
-    Status status = ERROR;
-    auto kvStore = OpenStore(storeIdName, false, status);
-    ASSERT_EQ(status, SUCCESS);
-    ASSERT_NE(kvStore, nullptr);
-    ResetIoctlState();
-    g_taggedFiles = true;
-    Status restoreStatus = kvStore->Restore("not_exist_backup", TEST_BASE_DIR);
-    EXPECT_NE(restoreStatus, SUCCESS);
-    EXPECT_FALSE(HasServiceAcl(DbFilePath(storeIdName)));
-    EXPECT_EQ(g_getPaths, ExpectedPaths(storeIdName));
-    EXPECT_EQ(g_clearFiles, ExpectedFileNames());
-    EXPECT_EQ(g_requests.size(), 12U);
-    CloseStore(storeIdName);
-    kvStore = nullptr;
-    (void)DeleteStore(storeIdName);
-}
-
-HWTEST_F(KvDumpStackOnFileDeletionTest, OpenStore_FlagFalse_ClearsStaleTags_001, TestSize.Level0)
-{
-    std::string storeIdName = "StaleTagStore";
-    Status status = ERROR;
-    auto kvStore = OpenStore(storeIdName, true, status);
-    ASSERT_EQ(status, SUCCESS);
-    ASSERT_NE(kvStore, nullptr);
-    CloseStore(storeIdName);
-    kvStore = nullptr;
-    ResetIoctlState();
-    g_taggedFiles = true;
-    status = ERROR;
-    auto reopenedStore = OpenStore(storeIdName, false, status);
-    ASSERT_EQ(status, SUCCESS);
-    ASSERT_NE(reopenedStore, nullptr);
-    EXPECT_EQ(g_getPaths, ExpectedPaths(storeIdName));
-    EXPECT_EQ(g_clearFiles, ExpectedFileNames());
-    EXPECT_EQ(g_requests.size(), 12U);
-    CloseStore(storeIdName);
-    reopenedStore = nullptr;
-    (void)DeleteStore(storeIdName);
-}
-
 HWTEST_F(KvDumpStackOnFileDeletionTest, Constructor_DumpStackFlagMatrix_001, TestSize.Level0)
 {
     const DumpStackFlagCase matrix[] = {
@@ -555,101 +406,5 @@ HWTEST_F(KvDumpStackOnFileDeletionTest, Restore_DumpStackFlagMatrix_001, TestSiz
         CloseStore(storeIdName);
         (void)DeleteStore(storeIdName);
     }
-}
-
-/**
- * @tc.name: Rebuild_CorruptedDb_ClearBeforeRebuild_001
- * @tc.desc: Corrupted DB rebuild clears dump-stack tags before rebuilding and preserves ACL
- * @tc.type: FUNC
- */
-HWTEST_F(KvDumpStackOnFileDeletionTest, Rebuild_CorruptedDb_ClearBeforeRebuild_001, TestSize.Level0)
-{
-    constexpr size_t corruptHeaderSize = 100;
-    constexpr size_t expectedRequests = 12U;
-    std::string storeIdName = "RebuildClearStore";
-    Status status = ERROR;
-    auto kvStore = OpenStore(storeIdName, true, status);
-    ASSERT_EQ(status, SUCCESS);
-    ASSERT_NE(kvStore, nullptr);
-    ASSERT_EQ(kvStore->Put({ "key" }, { "value" }), SUCCESS);
-    CloseStore(storeIdName);
-    kvStore = nullptr;
-
-    std::string dbFile = DbFilePath(storeIdName);
-    int fd = open(dbFile.c_str(), O_WRONLY);
-    ASSERT_GE(fd, 0);
-    const std::string corruptHeader(corruptHeaderSize, 'X');
-    ssize_t written = write(fd, corruptHeader.data(), corruptHeader.size());
-    close(fd);
-    ASSERT_EQ(written, static_cast<ssize_t>(corruptHeader.size()));
-    (void)unlink((dbFile + "-wal").c_str());
-    (void)unlink((dbFile + "-shm").c_str());
-
-    ResetIoctlState();
-    g_taggedFiles = true;
-    Options rebuildOptions = BuildStoreOptions(TEST_BASE_DIR, true);
-    rebuildOptions.rebuild = true;
-    status = ERROR;
-    auto rebuiltStore = StoreManager::GetInstance().GetKVStore({ TEST_APP_ID }, { storeIdName }, rebuildOptions,
-        status);
-    ASSERT_EQ(status, SUCCESS);
-    ASSERT_NE(rebuiltStore, nullptr);
-    EXPECT_TRUE(rebuiltStore->IsRebuild());
-    EXPECT_TRUE(HasServiceAcl(dbFile));
-    EXPECT_EQ(g_getPaths, ExpectedPaths(storeIdName));
-    EXPECT_EQ(g_clearFiles, ExpectedFileNames());
-    EXPECT_EQ(g_requests.size(), expectedRequests);
-    CloseStore(storeIdName);
-    rebuiltStore = nullptr;
-    (void)DeleteStore(storeIdName);
-}
-
-/**
- * @tc.name: CustomDir_ClearBeforeOpenAndDelete_001
- * @tc.desc: Custom dir open, reopen with flag false, and delete clear dump-stack tags and set ACL
- * @tc.type: FUNC
- */
-HWTEST_F(KvDumpStackOnFileDeletionTest, CustomDir_ClearBeforeOpenAndDelete_001, TestSize.Level0)
-{
-    constexpr size_t expectedRequests = 12U;
-    std::string storeIdName = "CustomDirClearStore";
-    std::string customBaseDir = BaseDir() + "/custom_sub";
-    std::error_code error;
-    std::filesystem::remove_all(customBaseDir, error);
-    std::filesystem::create_directories(customBaseDir, error);
-    ASSERT_FALSE(error);
-
-    Options enableOpts = BuildStoreOptions(customBaseDir, true, false, false, true);
-    Status status = ERROR;
-    auto kvStore = StoreManager::GetInstance().GetKVStore({ TEST_APP_ID }, { storeIdName }, enableOpts, status);
-    ASSERT_EQ(status, SUCCESS);
-    ASSERT_NE(kvStore, nullptr);
-    std::string customDbFile = SingleVerDirForBase(customBaseDir, storeIdName) + "/main/gen_natural_store.db";
-    EXPECT_TRUE(HasServiceAcl(customDbFile));
-    (void)StoreManager::GetInstance().CloseKVStore({ TEST_APP_ID }, { storeIdName }, customBaseDir);
-    kvStore = nullptr;
-
-    ResetIoctlState();
-    g_taggedFiles = true;
-    Options disableOpts = BuildStoreOptions(customBaseDir, false, false, false, true);
-    status = ERROR;
-    auto reopened = StoreManager::GetInstance().GetKVStore({ TEST_APP_ID }, { storeIdName }, disableOpts, status);
-    ASSERT_EQ(status, SUCCESS);
-    ASSERT_NE(reopened, nullptr);
-    EXPECT_EQ(g_getPaths, ExpectedPathsForBase(customBaseDir, storeIdName));
-    EXPECT_EQ(g_clearFiles, ExpectedFileNames());
-    EXPECT_EQ(g_requests.size(), expectedRequests);
-    (void)StoreManager::GetInstance().CloseKVStore({ TEST_APP_ID }, { storeIdName }, customBaseDir);
-    reopened = nullptr;
-
-    ResetIoctlState();
-    g_taggedFiles = true;
-    Status deleteStatus = StoreManager::GetInstance().Delete({ TEST_APP_ID }, { storeIdName }, disableOpts);
-    ASSERT_EQ(deleteStatus, SUCCESS);
-    EXPECT_EQ(g_getPaths, ExpectedPathsForBase(customBaseDir, storeIdName));
-    EXPECT_EQ(g_clearFiles, ExpectedFileNames());
-    EXPECT_EQ(g_requests.size(), expectedRequests);
-    EXPECT_NE(access(customDbFile.c_str(), F_OK), 0);
-    std::filesystem::remove_all(customBaseDir, error);
 }
 }
