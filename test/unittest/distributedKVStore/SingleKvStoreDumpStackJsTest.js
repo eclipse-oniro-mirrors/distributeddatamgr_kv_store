@@ -68,6 +68,13 @@ describe('SingleKvStoreDumpStackTest', function () {
         done();
     })
 
+    /**
+     * @tc.number SUB_DDM_DKV_SINGLEKVSTORE_DUMPSTACK_0100
+     * @tc.name DumpStackDefaultDisabled
+     * @tc.desc Test getKVStore without dumpStackOnFileDeletion (default false) and Put/Get
+     * @tc.type: FUNC
+     * @tc.require:
+     */
     it('DumpStackDefaultDisabled', 0, async function (done) {
         console.info('DumpStackDefaultDisabled');
         currentStoreId = 'dump_stack_default';
@@ -86,6 +93,13 @@ describe('SingleKvStoreDumpStackTest', function () {
         done();
     })
 
+    /**
+     * @tc.number SUB_DDM_DKV_SINGLEKVSTORE_DUMPSTACK_0200
+     * @tc.name DumpStackExplicitFalse
+     * @tc.desc Test getKVStore with dumpStackOnFileDeletion = false and Put/Get
+     * @tc.type: FUNC
+     * @tc.require:
+     */
     it('DumpStackExplicitFalse', 0, async function (done) {
         console.info('DumpStackExplicitFalse');
         currentStoreId = 'dump_stack_false';
@@ -93,7 +107,10 @@ describe('SingleKvStoreDumpStackTest', function () {
         try {
             kvStore = await kvManager.getKVStore(currentStoreId, options);
             expect(kvStore != null).assertTrue();
-            console.info('DumpStackExplicitFalse getKVStore success');
+            await kvStore.put(KEY_TEST_STRING_ELEMENT, VALUE_TEST_STRING_ELEMENT);
+            const result = await kvStore.get(KEY_TEST_STRING_ELEMENT);
+            expect(result == VALUE_TEST_STRING_ELEMENT).assertTrue();
+            console.info('DumpStackExplicitFalse Put/Get success');
         } catch (e) {
             console.error('DumpStackExplicitFalse fail: ' + `, error code is ${e.code}, message is ${e.message}`);
             expect(null).assertFail();
@@ -101,6 +118,13 @@ describe('SingleKvStoreDumpStackTest', function () {
         done();
     })
 
+    /**
+     * @tc.number SUB_DDM_DKV_SINGLEKVSTORE_DUMPSTACK_0300
+     * @tc.name DumpStackEnabledOpenSuccess
+     * @tc.desc Test getKVStore with dumpStackOnFileDeletion = true and Put/Get
+     * @tc.type: FUNC
+     * @tc.require:
+     */
     it('DumpStackEnabledOpenSuccess', 0, async function (done) {
         console.info('DumpStackEnabledOpenSuccess');
         currentStoreId = 'dump_stack_enabled';
@@ -120,6 +144,63 @@ describe('SingleKvStoreDumpStackTest', function () {
         done();
     })
 
+    /**
+     * @tc.number SUB_DDM_DKV_SINGLEKVSTORE_DUMPSTACK_0400
+     * @tc.name DumpStackUndefined
+     * @tc.desc Test getKVStore with dumpStackOnFileDeletion = undefined (fallback to default) and Put/Get
+     * @tc.type: FUNC
+     * @tc.require:
+     */
+    it('DumpStackUndefined', 0, async function (done) {
+        console.info('DumpStackUndefined');
+        currentStoreId = 'dump_stack_undefined';
+        const options = Object.assign({}, baseOptions, { dumpStackOnFileDeletion: undefined });
+        try {
+            kvStore = await kvManager.getKVStore(currentStoreId, options);
+            expect(kvStore != null).assertTrue();
+            await kvStore.put(KEY_TEST_STRING_ELEMENT, VALUE_TEST_STRING_ELEMENT);
+            const result = await kvStore.get(KEY_TEST_STRING_ELEMENT);
+            expect(result == VALUE_TEST_STRING_ELEMENT).assertTrue();
+            console.info('DumpStackUndefined Put/Get success');
+        } catch (e) {
+            console.error('DumpStackUndefined fail: ' + `, error code is ${e.code}, message is ${e.message}`);
+            expect(null).assertFail();
+        }
+        done();
+    })
+
+    /**
+     * @tc.number SUB_DDM_DKV_SINGLEKVSTORE_DUMPSTACK_0500
+     * @tc.name DumpStackNull
+     * @tc.desc Test getKVStore with dumpStackOnFileDeletion = null (fallback to default) and Put/Get
+     * @tc.type: FUNC
+     * @tc.require:
+     */
+    it('DumpStackNull', 0, async function (done) {
+        console.info('DumpStackNull');
+        currentStoreId = 'dump_stack_null';
+        const options = Object.assign({}, baseOptions, { dumpStackOnFileDeletion: null });
+        try {
+            kvStore = await kvManager.getKVStore(currentStoreId, options);
+            expect(kvStore != null).assertTrue();
+            await kvStore.put(KEY_TEST_STRING_ELEMENT, VALUE_TEST_STRING_ELEMENT);
+            const result = await kvStore.get(KEY_TEST_STRING_ELEMENT);
+            expect(result == VALUE_TEST_STRING_ELEMENT).assertTrue();
+            console.info('DumpStackNull Put/Get success');
+        } catch (e) {
+            console.error('DumpStackNull fail: ' + `, error code is ${e.code}, message is ${e.message}`);
+            expect(null).assertFail();
+        }
+        done();
+    })
+
+    /**
+     * @tc.number SUB_DDM_DKV_SINGLEKVSTORE_DUMPSTACK_0600
+     * @tc.name DumpStackInvalidTypeRejected
+     * @tc.desc Test getKVStore rejects non-boolean string dumpStackOnFileDeletion with error code 401
+     * @tc.type: FUNC
+     * @tc.require:
+     */
     it('DumpStackInvalidTypeRejected', 0, async function (done) {
         console.info('DumpStackInvalidTypeRejected');
         currentStoreId = 'dump_stack_invalid_type';
@@ -132,6 +213,178 @@ describe('SingleKvStoreDumpStackTest', function () {
             console.error('DumpStackInvalidTypeRejected fail: ' +
                 `, error code is ${e.code}, message is ${e.message}`);
             expect(e.code == 401).assertTrue();
+        }
+        done();
+    })
+
+    /**
+     * @tc.number SUB_DDM_DKV_SINGLEKVSTORE_DUMPSTACK_0700
+     * @tc.name DumpStackInvalidNumberTypeRejected
+     * @tc.desc Test getKVStore rejects non-boolean number dumpStackOnFileDeletion with error code 401
+     * @tc.type: FUNC
+     * @tc.require:
+     */
+    it('DumpStackInvalidNumberTypeRejected', 0, async function (done) {
+        console.info('DumpStackInvalidNumberTypeRejected');
+        currentStoreId = 'dump_stack_invalid_number';
+        const options = Object.assign({}, baseOptions, { dumpStackOnFileDeletion: 1 });
+        try {
+            kvStore = await kvManager.getKVStore(currentStoreId, options);
+            console.error('DumpStackInvalidNumberTypeRejected getKVStore should not succeed');
+            expect(null).assertFail();
+        } catch (e) {
+            console.error('DumpStackInvalidNumberTypeRejected fail: ' +
+                `, error code is ${e.code}, message is ${e.message}`);
+            expect(e.code == 401).assertTrue();
+        }
+        done();
+    })
+
+    /**
+     * @tc.number SUB_DDM_DKV_SINGLEKVSTORE_DUMPSTACK_0800
+     * @tc.name DumpStackCallbackEnabled
+     * @tc.desc Test getKVStore callback overload with dumpStackOnFileDeletion = true and Put/Get
+     * @tc.type: FUNC
+     * @tc.require:
+     */
+    it('DumpStackCallbackEnabled', 0, function (done) {
+        console.info('DumpStackCallbackEnabled');
+        currentStoreId = 'dump_stack_callback';
+        const options = Object.assign({}, baseOptions, { dumpStackOnFileDeletion: true });
+        let finished = false;
+        const finish = () => {
+            if (!finished) {
+                finished = true;
+                done();
+            }
+        };
+        try {
+            kvManager.getKVStore(currentStoreId, options, async function (err, store) {
+                if (err != undefined) {
+                    console.error('DumpStackCallbackEnabled callback fail: ' +
+                        `, error code is ${err.code}, message is ${err.message}`);
+                    expect(null).assertFail();
+                    finish();
+                    return;
+                }
+                kvStore = store;
+                try {
+                    expect(kvStore != null).assertTrue();
+                    await kvStore.put(KEY_TEST_STRING_ELEMENT, VALUE_TEST_STRING_ELEMENT);
+                    const result = await kvStore.get(KEY_TEST_STRING_ELEMENT);
+                    expect(result == VALUE_TEST_STRING_ELEMENT).assertTrue();
+                    console.info('DumpStackCallbackEnabled Put/Get success');
+                } catch (e) {
+                    console.error('DumpStackCallbackEnabled Put/Get fail: ' +
+                        `, error code is ${e.code}, message is ${e.message}`);
+                    expect(null).assertFail();
+                }
+                finish();
+            });
+        } catch (e) {
+            console.error('DumpStackCallbackEnabled fail: ' + `, error code is ${e.code}, message is ${e.message}`);
+            expect(null).assertFail();
+            finish();
+        }
+    })
+
+    /**
+     * @tc.number SUB_DDM_DKV_SINGLEKVSTORE_DUMPSTACK_0900
+     * @tc.name DumpStackToggleReopen
+     * @tc.desc Test reopening store with changed dumpStackOnFileDeletion succeeds (not persisted to metadata)
+     * @tc.type: FUNC
+     * @tc.require:
+     */
+    it('DumpStackToggleReopen', 0, async function (done) {
+        console.info('DumpStackToggleReopen');
+        currentStoreId = 'dump_stack_toggle_reopen';
+        const enabledOptions = Object.assign({}, baseOptions, { dumpStackOnFileDeletion: true });
+        const disabledOptions = Object.assign({}, baseOptions, { dumpStackOnFileDeletion: false });
+        const omittedOptions = Object.assign({}, baseOptions);
+        try {
+            kvStore = await kvManager.getKVStore(currentStoreId, enabledOptions);
+            expect(kvStore != null).assertTrue();
+            await kvStore.put(KEY_TEST_STRING_ELEMENT, VALUE_TEST_STRING_ELEMENT);
+            await kvManager.closeKVStore(TEST_BUNDLE_NAME, currentStoreId);
+            kvStore = null;
+
+            kvStore = await kvManager.getKVStore(currentStoreId, disabledOptions);
+            expect(kvStore != null).assertTrue();
+            let result = await kvStore.get(KEY_TEST_STRING_ELEMENT);
+            expect(result == VALUE_TEST_STRING_ELEMENT).assertTrue();
+            await kvManager.closeKVStore(TEST_BUNDLE_NAME, currentStoreId);
+            kvStore = null;
+
+            kvStore = await kvManager.getKVStore(currentStoreId, omittedOptions);
+            expect(kvStore != null).assertTrue();
+            result = await kvStore.get(KEY_TEST_STRING_ELEMENT);
+            expect(result == VALUE_TEST_STRING_ELEMENT).assertTrue();
+            console.info('DumpStackToggleReopen success');
+        } catch (e) {
+            console.error('DumpStackToggleReopen fail: ' + `, error code is ${e.code}, message is ${e.message}`);
+            expect(null).assertFail();
+        }
+        done();
+    })
+
+    /**
+     * @tc.number SUB_DDM_DKV_SINGLEKVSTORE_DUMPSTACK_1000
+     * @tc.name DumpStackBackupRestoreDelete
+     * @tc.desc Test backup, restore, deleteBackup and deleteKVStore when dumpStackOnFileDeletion is true
+     * @tc.type: FUNC
+     * @tc.require:
+     */
+    it('DumpStackBackupRestoreDelete', 0, async function (done) {
+        console.info('DumpStackBackupRestoreDelete');
+        currentStoreId = 'dump_stack_backup_restore';
+        const backupFile = 'dump_stack_backup_001';
+        const options = Object.assign({}, baseOptions, { dumpStackOnFileDeletion: true });
+        try {
+            kvStore = await kvManager.getKVStore(currentStoreId, options);
+            expect(kvStore != null).assertTrue();
+            await kvStore.put(KEY_TEST_STRING_ELEMENT, VALUE_TEST_STRING_ELEMENT);
+            await kvStore.backup(backupFile);
+            await kvStore.put(KEY_TEST_STRING_ELEMENT, 'value-string-modified');
+            await kvStore.restore(backupFile);
+            const result = await kvStore.get(KEY_TEST_STRING_ELEMENT);
+            expect(result == VALUE_TEST_STRING_ELEMENT).assertTrue();
+            const deleteResults = await kvStore.deleteBackup([backupFile]);
+            expect(deleteResults != null && deleteResults.length == 1).assertTrue();
+            await kvManager.closeKVStore(TEST_BUNDLE_NAME, currentStoreId, options);
+            await kvManager.deleteKVStore(TEST_BUNDLE_NAME, currentStoreId, options);
+            kvStore = null;
+            console.info('DumpStackBackupRestoreDelete success');
+        } catch (e) {
+            console.error('DumpStackBackupRestoreDelete fail: ' +
+                `, error code is ${e.code}, message is ${e.message}`);
+            expect(null).assertFail();
+        }
+        done();
+    })
+
+    /**
+     * @tc.number SUB_DDM_DKV_SINGLEKVSTORE_DUMPSTACK_1100
+     * @tc.name DumpStackDeviceStoreEnabled
+     * @tc.desc Test getKVStore for DEVICE_COLLABORATION with dumpStackOnFileDeletion = true
+     * @tc.type: FUNC
+     * @tc.require:
+     */
+    it('DumpStackDeviceStoreEnabled', 0, async function (done) {
+        console.info('DumpStackDeviceStoreEnabled');
+        currentStoreId = 'dump_stack_device_enabled';
+        const options = Object.assign({}, baseOptions, {
+            kvStoreType: factory.KVStoreType.DEVICE_COLLABORATION,
+            dumpStackOnFileDeletion: true,
+        });
+        try {
+            kvStore = await kvManager.getKVStore(currentStoreId, options);
+            expect(kvStore != null).assertTrue();
+            await kvStore.put(KEY_TEST_STRING_ELEMENT, VALUE_TEST_STRING_ELEMENT);
+            console.info('DumpStackDeviceStoreEnabled success');
+        } catch (e) {
+            console.error('DumpStackDeviceStoreEnabled fail: ' +
+                `, error code is ${e.code}, message is ${e.message}`);
+            expect(null).assertFail();
         }
         done();
     })
