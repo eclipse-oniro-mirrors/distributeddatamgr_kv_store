@@ -388,4 +388,70 @@ describe('SingleKvStoreDumpStackTest', function () {
         }
         done();
     })
+
+    /**
+     * @tc.number SUB_DDM_DKV_SINGLEKVSTORE_DUMPSTACK_1200
+     * @tc.name DumpStackInvalidObjectTypeRejected
+     * @tc.desc Test getKVStore rejects non-boolean object dumpStackOnFileDeletion with error code 401
+     * @tc.type: FUNC
+     * @tc.require:
+     */
+    it('DumpStackInvalidObjectTypeRejected', 0, async function (done) {
+        console.info('DumpStackInvalidObjectTypeRejected');
+        currentStoreId = 'dump_stack_invalid_object';
+        const options = Object.assign({}, baseOptions, { dumpStackOnFileDeletion: {} });
+        try {
+            kvStore = await kvManager.getKVStore(currentStoreId, options);
+            console.error('DumpStackInvalidObjectTypeRejected getKVStore should not succeed');
+            expect(null).assertFail();
+        } catch (e) {
+            console.error('DumpStackInvalidObjectTypeRejected fail: ' +
+                `, error code is ${e.code}, message is ${e.message}`);
+            expect(e.code == 401).assertTrue();
+        }
+        done();
+    })
+
+    /**
+     * @tc.number SUB_DDM_DKV_SINGLEKVSTORE_DUMPSTACK_1300
+     * @tc.name DumpStackCustomRootDirEnabled
+     * @tc.desc Test getKVStore with rootDir and dumpStackOnFileDeletion = true and Put/Get
+     * @tc.type: FUNC
+     * @tc.require:
+     */
+    it('DumpStackCustomRootDirEnabled', 0, async function (done) {
+        console.info('DumpStackCustomRootDirEnabled');
+        currentStoreId = 'dump_stack_custom_root_dir';
+        const options = Object.assign({}, baseOptions, {
+            backup: false,
+            rootDir: '/data/storage/el2/database/entry',
+            dumpStackOnFileDeletion: true,
+        });
+        try {
+            kvStore = await kvManager.getKVStore(currentStoreId, options);
+            expect(kvStore != null).assertTrue();
+            await kvStore.put(KEY_TEST_STRING_ELEMENT, VALUE_TEST_STRING_ELEMENT);
+            const result = await kvStore.get(KEY_TEST_STRING_ELEMENT);
+            expect(result == VALUE_TEST_STRING_ELEMENT).assertTrue();
+            await kvManager.closeKVStore(TEST_BUNDLE_NAME, currentStoreId, options);
+            await kvManager.deleteKVStore(TEST_BUNDLE_NAME, currentStoreId, options);
+            kvStore = null;
+            console.info('DumpStackCustomRootDirEnabled success');
+        } catch (e) {
+            console.error('DumpStackCustomRootDirEnabled fail: ' +
+                `, error code is ${e.code}, message is ${e.message}`);
+            if (kvStore != null) {
+                try {
+                    await kvManager.closeKVStore(TEST_BUNDLE_NAME, currentStoreId, options);
+                    await kvManager.deleteKVStore(TEST_BUNDLE_NAME, currentStoreId, options);
+                } catch (cleanupErr) {
+                    console.error('DumpStackCustomRootDirEnabled cleanup fail: ' +
+                        `, error code is ${cleanupErr.code}, message is ${cleanupErr.message}`);
+                }
+                kvStore = null;
+            }
+            expect(null).assertFail();
+        }
+        done();
+    })
 })
